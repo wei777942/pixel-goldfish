@@ -1,6 +1,6 @@
 /* 撈金魚 phone controller (motion sensing). Sends input only; renders what the big screen says.
- *  - tilt (deviceorientation) -> rate-controlled net position, sent as cumulative counters at ~20 Hz
- *  - quick upward flick (devicemotion) -> ONE 'sc' scoop event with strength; the host decides catch / tear */
+ *  - tilt away from neutral (deviceorientation) -> net goes DOWN into the water and moves (rate control, sent as cumulative counters)
+ *  - return to neutral (inside the deadzone, held ~200ms) -> ONE 'sc' scoop event with the snap-back speed; host decides catch / tear */
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
@@ -15,11 +15,12 @@
   var cid; try { cid = localStorage.getItem('gf-cid-' + room); } catch (e) {}
   if (!cid) { cid = 'p' + Math.random().toString(36).slice(2, 10); try { localStorage.setItem('gf-cid-' + room, cid); } catch (e) {} }
 
-  var TUNE = { dead: 0.07, range: 0.42, vmax: 230, flickMin: 7, collectMs: 70, cooldownMs: 700, rateMs: 50, keepMs: 450 };
+  // dead: tilt (|delta gravity|, ~sin angle) that puts the net in the water; exit: inside this for exitHold ms = scoop
+  var TUNE = { dead: 0.07, exit: 0.06, exitHold: 200, minDip: 350, range: 0.42, vmax: 230, rateMs: 50, keepMs: 450 };
   var S = { slot: -1, st: null, lastSt: 0, joined: false, full: false, relayOn: false, seq: 0, cx: 0, cy: 0, rc: 0, sn: 0, ss: 0,
     seenEv: {}, lastSent: 0, dirty: false, mode: 'start' /* start|bad|run */, touchMode: false, tries: 0,
-    u: null, u0: null, calUntil: 0, calAcc: null, vx: 0, vy: 0, lastOri: 0, lastMot: 0, tx: 0, ty: 0, lastTick: 0,
-    lp: null, s: 1, flick: null, lastScoopAt: 0, lastPeak: 0, peakShown: 0, lastPhase: '', brk: 26, orient: 0, motion: 0, sendN: 0, scN: 0 };
+    u: null, u0: null, calUntil: 0, calAcc: null, vx: 0, vy: 0, lastOri: 0, tx: 0, ty: 0, lastTick: 0,
+    down: false, downAt: 0, inDead: 0, hist: [], tear: 4, warn: false, orient: 0, sendN: 0, scN: 0, lastSnap: 0 };
 
   /* ================= relay ================= */
   var hub = new GFRelay.Hub({
@@ -27,7 +28,7 @@
     onmsg: function (m) {
       if (m.k === 'full' && m.c === cid) { S.full = true; render(); return; }
       if (m.k !== 'st') return;
-      S.st = m; S.lastSt = Date.now(); if (m.bk) S.brk = m.bk;
+      S.st = m; S.lastSt = Date.now(); if (m.tr) S.tear = m.tr;
       var i = -1; for (var j = 0; j < m.pl.length; j++) if (m.pl[j].c === cid) i = j;
       if (i >= 0) { if (!S.joined || S.slot !== i) { S.joined = true; S.slot = i; S.full = false; $('app').style.setProperty('--pc', PCOL[i]); } }
       if (m.ph !== S.lastPhase) { if (m.ph === 'countdown' && S.mode === 'run') calibrate(); S.lastPhase = m.ph; }
@@ -45,14 +46,17 @@
     if (!force && !S.dirty && now - S.lastSent < TUNE.keepMs) return;
     if (!force && now - S.lastSent < TUNE.rateMs) return;       // <= 20 msg/s
     S.lastSent = now; S.dirty = false; S.seq++; S.sendN++;
-    hub.send({ k: 'in', c: cid, s: S.seq, x: Math.round(S.cx * 10) / 10, y: Math.round(S.cy * 10) / 10, rc: S.rc, sn: S.sn, ss: S.ss, mo: S.mode === 'run' ? 1 : 0, ts: now }, !force);
+    hub.send({ k: 'in', c: cid, s: S.seq, x: Math.round(S.cx * 10) / 10, y: Math.round(S.cy * 10) / 10, d: S.down ? 1 : 0, rc: S.rc, sn: S.sn, ss: S.ss, mo: S.mode === 'run' ? 1 : 0, ts: now }, !force);
   }
-  function sendScoop(peak) {
-    S.sn++; S.ss = Math.round(peak * 10) / 10; S.scN++;
-    var m = { k: 'sc', c: cid, n: S.sn, str: S.ss, ts: Date.now() };
-    hub.send(m); setTimeout(function () { hub.send(m); }, 90); setTimeout(function () { hub.send(m); }, 300);  // same id: host de-dupes
-    S.lastPeak = peak; S.peakShown = Date.now(); if (navigator.vibrate) navigator.vibrate(peak >= S.brk ? [80, 40, 80] : 25);
-    flickMeter(peak);
+  function sendScoop(snap) {
+    S.sn++; S.ss = Math.round(snap * 100) / 100; S.scN++; S.seq++; S.sendN++;
+    var ts = Date.now(), q = S.seq;
+    // 'in' with d:0 first (it also carries the scoop counter), then the dedicated 'sc' event, re-sent twice with the same id
+    hub.send({ k: 'in', c: cid, s: q, x: Math.round(S.cx * 10) / 10, y: Math.round(S.cy * 10) / 10, d: 0, rc: S.rc, sn: S.sn, ss: S.ss, mo: 1, ts: ts });
+    var m = { k: 'sc', c: cid, n: S.sn, str: S.ss, q: q, ts: ts };
+    hub.send(m); setTimeout(function () { hub.send(m); }, 90); setTimeout(function () { hub.send(m); }, 300);
+    if (navigator.vibrate) navigator.vibrate(snap >= S.tear ? [80, 40, 80] : 25);
+    var d = $('dot'); d.classList.remove('lift'); void d.offsetWidth; d.classList.add('lift'); setTimeout(function () { d.classList.remove('lift'); }, 600);
   }
 
   /* ================= sensors ================= */
@@ -69,30 +73,9 @@
     if (!S.u) S.u = u; else { var a = 0.4; S.u = norm([S.u[0] + (u[0] - S.u[0]) * a, S.u[1] + (u[1] - S.u[1]) * a, S.u[2] + (u[2] - S.u[2]) * a]); }
     if (S.calAcc) S.calAcc.push(u);
   }
-  function onMot(e) {
-    var now = Date.now(); S.motion++; S.lastMot = now;
-    var ag = e.accelerationIncludingGravity, ac = e.acceleration, lin = null;
-    if (ag && typeof ag.x === 'number' && ag.x !== null) {
-      var g = [ag.x, ag.y, ag.z];
-      if (!S.lp) S.lp = g.slice(); else for (var i = 0; i < 3; i++) S.lp[i] += (g[i] - S.lp[i]) * 0.04;
-      // platform sign convention (iOS reports inverted vs spec): gravity LP must point along "up"
-      if (S.u && Math.hypot(S.lp[0], S.lp[1], S.lp[2]) > 4) { var d = S.lp[0] * S.u[0] + S.lp[1] * S.u[1] + S.lp[2] * S.u[2]; if (Math.abs(d) > 3) S.s = d > 0 ? 1 : -1; }
-      lin = (ac && typeof ac.x === 'number' && ac.x !== null) ? [ac.x, ac.y, ac.z] : [g[0] - S.lp[0], g[1] - S.lp[1], g[2] - S.lp[2]];
-    } else if (ac && typeof ac.x === 'number' && ac.x !== null) lin = [ac.x, ac.y, ac.z];
-    if (!lin || !S.u || S.mode !== 'run' || S.touchMode) return;
-    var up = S.s * (lin[0] * S.u[0] + lin[1] * S.u[1] + lin[2] * S.u[2]);
-    // flick state machine: rising edge -> collect peak for ~70ms -> fire one scoop
-    if (!S.flick) {
-      if (up > TUNE.flickMin && now - S.lastScoopAt > TUNE.cooldownMs && now > S.calUntil) S.flick = { t0: now, peak: up };
-    } else {
-      if (up > S.flick.peak) S.flick.peak = up;
-      if (now - S.flick.t0 >= TUNE.collectMs) { var p = S.flick.peak; S.flick = null; S.lastScoopAt = now; S.vx = S.vy = 0; S.holdUntil = now + 450; sendScoop(p); }
-    }
-  }
-
   function calibrate() {
-    S.calUntil = Date.now() + 700; S.calAcc = []; S.vx = S.vy = 0;
-    $('msg').textContent = '校正中…請握穩不要動';
+    S.calUntil = Date.now() + 700; S.calAcc = []; S.vx = S.vy = 0; S.down = false; S.inDead = 0; S.hist = [];
+    $('msg').textContent = '校正中…';
     setTimeout(function () {
       if (S.calAcc && S.calAcc.length) { var m = [0, 0, 0]; S.calAcc.forEach(function (u) { m[0] += u[0]; m[1] += u[1]; m[2] += u[2]; }); S.u0 = norm(m); }
       else if (S.u) S.u0 = S.u.slice();
@@ -100,7 +83,19 @@
     }, 720);
   }
 
-  // 50 Hz: tilt -> velocity (deadzone + response curve + smoothing) -> integrated position; send at <=20 Hz
+  // snap-back speed: fastest drop of the tilt magnitude over ~100ms in the last 700ms (rad/s)
+  function snapSpeed(now) {
+    var h = S.hist, best = 0;
+    for (var i = 0; i < h.length; i++) for (var j = i + 1; j < h.length; j++) {
+      var dt = h[j].t - h[i].t; if (dt < 80) continue; if (dt > 160) break;
+      var r = (h[i].m - h[j].m) / (dt / 1000); if (r > best) best = r;
+    }
+    return best;
+  }
+  function setNetState(st) { // 'down' | 'up' | 'broken' : visual only
+    ['dot', 'netico'].forEach(function (id) { var el = $(id); ['down', 'up', 'broken'].forEach(function (c) { el.classList.toggle(c, c === st); }); });
+  }
+  // 50 Hz: tilt -> velocity (deadzone + curve + smoothing) -> integrated position; send at <=20 Hz
   function tick() {
     var now = Date.now(), dt = Math.min(0.1, (now - (S.lastTick || now)) / 1000); S.lastTick = now;
     if (S.mode !== 'run' || S.touchMode) { sendIn(false); return; }
@@ -114,33 +109,37 @@
       ty = (dyv * t1 + dz * t2) * ky;            // top edge down (away) -> negative -> net moves up the screen
     }
     S.tx = tx; S.ty = ty;
-    var tvx = 0, tvy = 0;
-    if (now >= (S.holdUntil || 0) && !S.flick) {
-      var mag = Math.hypot(tx, ty);
-      if (mag > TUNE.dead) {
-        var f = Math.min(1, (mag - TUNE.dead) / (TUNE.range - TUNE.dead)); f = Math.pow(f, 1.3);
-        tvx = tx / mag * f * TUNE.vmax; tvy = ty / mag * f * TUNE.vmax;
-      }
+    var mag = Math.hypot(tx, ty), tvx = 0, tvy = 0;
+    S.hist.push({ t: now, m: mag }); while (S.hist.length && now - S.hist[0].t > 800) S.hist.shift();
+    if (mag > TUNE.dead) {
+      var f = Math.min(1, (mag - TUNE.dead) / (TUNE.range - TUNE.dead)); f = Math.pow(f, 1.3);
+      tvx = tx / mag * f * TUNE.vmax; tvy = ty / mag * f * TUNE.vmax;
     }
     var k = 1 - Math.exp(-dt * 12); S.vx += (tvx - S.vx) * k; S.vy += (tvy - S.vy) * k;
     if (Math.abs(S.vx) > 0.4 || Math.abs(S.vy) > 0.4) { S.cx += S.vx * dt; S.cy += S.vy * dt; S.dirty = true; }
+    // dip / lift state machine
+    var calibrating = !!S.calAcc || now <= S.calUntil || !S.u0, brokenNow = S.st && S.slot >= 0 && S.st.pl[S.slot] && S.st.pl[S.slot].br > 0;
+    if (calibrating) { S.down = false; S.inDead = 0; }
+    else if (!S.down) {
+      if (mag > TUNE.dead) { S.down = true; S.downAt = now; S.inDead = 0; sendIn(true); if (navigator.vibrate) navigator.vibrate(8); }
+    } else if (mag < TUNE.exit) {
+      if (!S.inDead) S.inDead = now;
+      else if (now - S.inDead >= TUNE.exitHold) {          // back at centre for ~200ms: LIFT
+        var held = S.inDead - S.downAt, snap = snapSpeed(S.inDead + 40);
+        S.down = false; S.inDead = 0; S.vx = S.vy = 0; S.lastSnap = snap;
+        if (held >= TUNE.minDip) sendScoop(snap); else sendIn(true);
+      }
+    } else S.inDead = 0;
+    // warning visual: snapping back close to the tear speed
+    var w = S.down && snapSpeed(now) > S.tear * 0.7; if (w !== S.warn) { S.warn = w; $('dot').classList.toggle('warn', w); }
+    setNetState(brokenNow ? 'broken' : S.down ? 'down' : 'up');
     sendIn(false);
-    // tilt dot
-    var el = $('tilt'); var w = el.clientWidth / 2 - 18, h = el.clientHeight / 2 - 18;
-    $('dot').style.transform = 'translate(' + Math.max(-1, Math.min(1, tx / TUNE.range)) * w + 'px,' + Math.max(-1, Math.min(1, ty / TUNE.range)) * h + 'px)';
-    // sensor watchdog
+    var el = $('tilt'); var wd = el.clientWidth / 2 - 18, ht = el.clientHeight / 2 - 18;
+    var px = Math.max(-1, Math.min(1, tx / TUNE.range)) * wd + 'px', py = Math.max(-1, Math.min(1, ty / TUNE.range)) * ht + 'px', dt0 = $('dot');
+    dt0.style.setProperty('--tx', px); dt0.style.setProperty('--ty', py); dt0.style.transform = 'translate(' + px + ',' + py + ')';
     if (now - S.lastOri > 3000 && S.lastOri) showBad('lost');
   }
   setInterval(tick, 20);
-
-  function flickMeter(peak) {
-    var max = S.brk * 1.25, pct = Math.min(100, peak / max * 100);
-    $('ffill').style.width = pct + '%'; $('fval').textContent = peak.toFixed(1) + (peak >= S.brk ? ' 太用力!' : ' OK');
-    $('ffill').style.background = peak >= S.brk ? '#e8423c' : PCOL[Math.max(0, S.slot)];
-    $('fzone').style.left = (TUNE.flickMin / max * 100) + '%'; $('fzone').style.width = ((S.brk - TUNE.flickMin) / max * 100) + '%';
-    $('fbreak').style.width = (100 - S.brk / max * 100) + '%';
-    clearTimeout(S.fmT); S.fmT = setTimeout(function () { $('ffill').style.width = '0'; }, 1400);
-  }
 
   /* ================= permission flow ================= */
   function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
@@ -185,7 +184,7 @@
   var listening = false;
   function attach() {
     if (listening) return; listening = true;
-    window.addEventListener('deviceorientation', onOri); window.addEventListener('devicemotion', onMot);
+    window.addEventListener('deviceorientation', onOri);
   }
   function onStartTap() {
     // requestPermission() MUST be invoked synchronously inside the tap handler (iOS user-gesture rule)
@@ -203,9 +202,9 @@
     });
   }
   function beginSensing() {
-    S.lastOri = 0; S.u = null; S.orient = 0; S.motion = 0; S.lp = null; attach();
+    S.lastOri = 0; S.u = null; S.orient = 0; attach();
     var t0 = Date.now(), iv = setInterval(function () {
-      if (S.orient > 0 && S.motion > 0 || S.orient > 0 && Date.now() - t0 > 2500) { clearInterval(iv); finishStart(); }
+      if (S.orient > 0) { clearInterval(iv); finishStart(); }
       else if (Date.now() - t0 > 3000) { clearInterval(iv); showBad('nosensor'); }
     }, 80);
   }
@@ -226,7 +225,7 @@
     tl.addEventListener('pointerdown', function (e) { if (!S.touchMode) return; ptr = e.pointerId; lx = e.clientX; ly = e.clientY; tl.setPointerCapture(e.pointerId); });
     tl.addEventListener('pointermove', function (e) { if (e.pointerId !== ptr) return; S.cx += e.clientX - lx; S.cy += e.clientY - ly; lx = e.clientX; ly = e.clientY; S.dirty = true; sendIn(false); });
     tl.addEventListener('pointerup', function () { ptr = null; });
-    $('dbgscoop').addEventListener('click', function () { sendScoop(15); });
+    $('dbgscoop').addEventListener('click', function () { S.down = true; S.downAt = Date.now() - 500; sendIn(true); setTimeout(function () { S.down = false; sendScoop(1); }, 100); });
     setInterval(function () { if (S.touchMode) sendIn(false); }, 45);
   }
   ['contextmenu', 'selectstart', 'dragstart'].forEach(function (n) { document.addEventListener(n, function (e) { e.preventDefault(); }); });
@@ -237,7 +236,7 @@
       if (S.seenEv[e.id]) return; S.seenEv[e.id] = 1;
       if (S.slot < 0 || e.s !== S.slot) return;
       var bad = e.y === 'x' || e.y === 'v';
-      var d = document.createElement('div'); d.className = 'pop' + (bad ? ' x' : ''); d.textContent = e.y === 'v' ? '太用力!' : e.y === 'x' ? '破了!' : '+' + e.p; $('pops').appendChild(d); setTimeout(function () { d.remove(); }, 1200);
+      var d = document.createElement('div'); d.className = 'pop' + (bad ? ' x' : ''); d.textContent = bad ? 'X' : '+' + e.p; $('pops').appendChild(d); setTimeout(function () { d.remove(); }, 1200);
       if (navigator.vibrate) navigator.vibrate(bad ? [60, 40, 60] : e.y === 'r' ? [30, 30, 30, 30, 60] : 25);
     });
   }
@@ -264,8 +263,7 @@
     else if (ph === 'lobby') msg = me.rd ? '等待另一位玩家 READY…' : '握穩手機，準備好就按 READY';
     else if (ph === 'countdown') msg = '準備!（倒數時自動校正）';
     else if (playing) msg = me.br > 0 ? '紙網破了…等新網' : '傾斜移動 · 往上快速一甩撈起';
-    $('msg').textContent = hostOn ? msg : '';
-    $('hint').textContent = me.br > 0 ? '紙網破了！等新網…' : playing ? '往上快速一甩 = 撈!' : '往上快速一甩 = 撈!';
+    $('msg').textContent = hostOn && S.calAcc ? '校正中…' : '';
     $('tilt').classList.toggle('act', Math.hypot(S.tx || 0, S.ty || 0) > TUNE.dead);
     var over = $('over');
     if (ph === 'end') {

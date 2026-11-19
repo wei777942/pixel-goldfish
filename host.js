@@ -8,7 +8,7 @@
   var DURATION = Math.max(5, +Q.get('dur') || 60);
   var PX0 = 8, PY0 = 26, PX1 = 312, PY1 = 172;          // pond rect
   var NET_R = 13, GAIN = +Q.get('gain') || 0.5;
-  var SCOOP_MIN = 7, SCOOP_BREAK = +Q.get('brk') || 26; // flick strength (m/s^2) window: below min = no scoop, above break = net tears
+  var TEAR = +Q.get('tear') || 3.3;   // snap-back speed (tilt change in rad/s) at which the paper tears
   var PAL = {
     ink: '#14102a', deep: '#0b2a5b', water: '#1456a0', water2: '#1b6ab8', light: '#2d86d6', hi: '#7cc8ff',
     stone: '#3c4166', stone2: '#6b7399', stone3: '#9aa3c7', lily: '#2e9e4f', lily2: '#5fd36b',
@@ -150,7 +150,7 @@
   var joinURL = base + 'play.html?r=' + room;
 
   function newPlayer(i) {
-    return { i: i, cid: null, lastSeen: 0, lastSeq: -1, cx: null, cy: null, lastRc: 0, ready: false, motion: false, lastSn: 0, lastStr: 0,
+    return { i: i, cid: null, lastSeen: 0, lastSeq: -1, cx: null, cy: null, lastRc: 0, ready: false, motion: false, lastSn: 0, lastStr: 0, dn: false, downT: 0, ign: -1,
       x: i ? 240 : 80, y: 110, tx: i ? 240 : 80, ty: 110, lift: 0, cool: 0, dur: 100, broken: 0, score: 0, caught: { s: 0, b: 0, r: 0 }, speed: 0 };
   }
   var G = { phase: 'lobby', players: [newPlayer(0), newPlayer(1)], fish: [], fx: [], pops: [], ev: [], evId: 1, tLeft: DURATION, cd: 0, cdT: 0, winner: null, t: 0, relay: { open: 0, total: 4 }, hostRx: 0, round: 0 };
@@ -201,7 +201,7 @@
       if (i < 0) { hub.send({ k: 'full', c: m.c }); return; }
       p = G.players[i];
       var wasConn = connected(p) && p.cid === m.c;
-      p.cid = m.c; p.lastSeen = now; p.lastSeq = -1; p.cx = null; p.cy = null; p.lastRc = m.rc | 0; p.lastSn = m.sn | 0; p.motion = !!m.mo;
+      p.cid = m.c; p.lastSeen = now; p.lastSeq = -1; p.cx = null; p.cy = null; p.lastRc = m.rc | 0; p.lastSn = m.sn | 0; p.motion = !!m.mo; p.ign = -1; p.dn = false; p.downT = 0;
       if (!wasConn) SFX.join();
       broadcast(); return;
     }
@@ -222,20 +222,21 @@
       }
     }
     p.motion = !!m.mo;
-    if (typeof m.sn === 'number' && m.sn > p.lastSn) { p.lastSn = m.sn; doScoop(p, +m.ss || 0); }
+    if (m.s > p.ign) { var nd = !!m.d && G.phase === 'play' && p.broken <= 0; if (nd && !p.dn) { p.downT = 0; splash(p.x, p.y); SFX.dip(); } p.dn = nd; }
+    if (typeof m.sn === 'number' && m.sn > p.lastSn) { p.lastSn = m.sn; doScoop(p, +m.ss || 0, m.s); }
     var rc = m.rc | 0;
     if (rc > p.lastRc) { if ((G.phase === 'lobby' || G.phase === 'end') && p.motion) { if (!p.ready) SFX.ready(); p.ready = true; } p.lastRc = rc; }
   }
   function onScoopMsg(m) {
     var i = slotOf(m.c); if (i < 0) return; var p = G.players[i];
     p.lastSeen = Date.now();
-    if (typeof m.n === 'number' && m.n > p.lastSn) { p.lastSn = m.n; doScoop(p, +m.str || 0); }
+    if (typeof m.n === 'number' && m.n > p.lastSn) { p.lastSn = m.n; doScoop(p, +m.str || 0, m.q); }
   }
 
   function snapshot() {
     return {
-      k: 'st', rm: room, mn: SCOOP_MIN, bk: SCOOP_BREAK, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
-      pl: G.players.map(function (p) { return { c: p.cid, on: connected(p) ? 1 : 0, rd: p.ready ? 1 : 0, du: Math.max(0, Math.round(p.dur)), br: Math.ceil(p.broken * 10) / 10, lf: p.lift > 0 ? 1 : 0, mo: p.motion ? 1 : 0, sc: p.score, cs: p.caught.s, cb: p.caught.b, cr: p.caught.r }; }),
+      k: 'st', rm: room, tr: TEAR, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
+      pl: G.players.map(function (p) { return { c: p.cid, on: connected(p) ? 1 : 0, rd: p.ready ? 1 : 0, du: Math.max(0, Math.round(p.dur)), br: Math.ceil(p.broken * 10) / 10, lf: p.lift > 0 ? 1 : 0, dn: p.dn ? 1 : 0, mo: p.motion ? 1 : 0, sc: p.score, cs: p.caught.s, cb: p.caught.b, cr: p.caught.r }; }),
       ev: G.ev.map(function (e) { return { id: e.id, s: e.s, p: e.p, y: e.y }; })
     };
   }
@@ -257,7 +258,7 @@
       var sp = f.sp * (f.bump > 0 ? 2.2 : 1);
       // gently dodge dipped nets
       G.players.forEach(function (p) {
-        if (p.lift <= 0 && p.broken <= 0 && G.phase === 'play') { var dx = f.x - p.x, dy = f.y - p.y, d = Math.hypot(dx, dy); if (d < NET_R + 10 && d > .1) { var k = TYPES[f.type].rare ? 1.8 : .5; f.a += Math.atan2(Math.sin(Math.atan2(dy, dx) - f.a), Math.cos(Math.atan2(dy, dx) - f.a)) * Math.min(1, dt * k); if (TYPES[f.type].rare) f.bump = Math.max(f.bump, .2); } }
+        if (p.dn && p.broken <= 0 && G.phase === 'play') { var dx = f.x - p.x, dy = f.y - p.y, d = Math.hypot(dx, dy); if (d < NET_R + 10 && d > .1) { var k = TYPES[f.type].rare ? 1.4 : .3; f.a += Math.atan2(Math.sin(Math.atan2(dy, dx) - f.a), Math.cos(Math.atan2(dy, dx) - f.a)) * Math.min(1, dt * k); if (TYPES[f.type].rare) f.bump = Math.max(f.bump, .2); } }
       });
       f.x += Math.cos(f.a) * sp * dt; f.y += Math.sin(f.a) * sp * dt * .8;
       var mx = PX0 + t.len * .6 + 2, Mx = PX1 - t.len * .6 - 2, my = PY0 + t.hh + 3, My = PY1 - t.hh - 3;
@@ -268,8 +269,8 @@
   }
 
   function breakNet(p, violent) {
-    p.broken = 3.5; p.lift = 0; p.dur = 0; p.cool = 0; SFX.brk(); splash(p.x, p.y, true);
-    pop(p.x, p.y - 20, violent ? '太用力!' : '破了!', PAL.red); addEvent(p.i, 0, violent ? 'v' : 'x');
+    p.broken = 3.5; p.lift = 0; p.dur = 0; p.cool = 0; p.dn = false; p.downT = 0; SFX.brk(); splash(p.x, p.y, true);
+    pop(p.x, p.y - 20, violent ? '太快!' : '破了!', PAL.red); addEvent(p.i, 0, violent ? 'v' : 'x');
   }
   function updatePlayers(dt) {
     var a = 1 - Math.exp(-dt * 14); // ease toward the (20-25 Hz) target positions
@@ -283,20 +284,25 @@
         if (p.broken <= 0) { p.broken = 0; p.dur = 100; pop(p.x, p.y - 20, '新網!', PAL.cream); SFX.ready(); }
         return;
       }
-      if (G.phase === 'play') { // paper net is always in the water: it slowly wears, faster when moving / big fish bump it
-        var drain = 3 + Math.min(p.speed, 120) * 0.05;
-        G.fish.forEach(function (f) { if (!f.dead && f.type === 'b' && Math.hypot(f.x - p.x, f.y - p.y) < NET_R + 3) drain += 14; });
+      if (!connected(p)) { p.dn = false; }
+      if (G.phase !== 'play') { p.dn = false; p.downT = 0; return; }
+      if (p.dn) { // net is in the water: it wears, faster when moving fast or bumped by big fish
+        p.downT += dt;
+        var drain = 3.5 + Math.min(p.speed, 120) * 0.05;
+        G.fish.forEach(function (f) { if (!f.dead && f.type === 'b' && Math.hypot(f.x - p.x, f.y - p.y) < NET_R + 3) drain += 12; });
         p.dur -= drain * dt;
         if (p.dur <= 0) breakNet(p, false);
-      }
+      } else p.downT = 0;
     });
   }
-  function doScoop(p, str) {
-    p.lastStr = str;
-    if (G.phase !== 'play' || p.broken > 0 || p.cool > 0 || str < SCOOP_MIN) return;
+  // phone says: net came back to centre (the lift). str = snap-back speed (rad/s)
+  function doScoop(p, str, q) {
+    p.lastStr = str; if (typeof q === 'number') p.ign = Math.max(p.ign, q);
+    var held = p.downT; p.dn = false; p.downT = 0;
+    if (G.phase !== 'play' || p.broken > 0 || p.cool > 0 || held < 0.3) return;
     p.cool = .6; p.lift = .5; splash(p.x, p.y); SFX.lift();
-    if (str >= SCOOP_BREAK) { breakNet(p, true); return; }   // too violent: paper tears
-    var s = (str - SCOOP_MIN) / (SCOOP_BREAK - SCOOP_MIN), rad = NET_R * (.9 + .35 * s), mul = .8 + .7 * s;
+    if (str >= TEAR) { breakNet(p, true); return; }   // snapped back too fast: paper tears
+    var rad = NET_R * 1.2, mul = 1;
     var cand = [];
     G.fish.forEach(function (f) { if (!f.dead) { var d = Math.hypot(f.x - p.x, f.y - p.y); if (d <= rad + TYPES[f.type].len * .15) cand.push([d, f]); } });
     if (!cand.length) { p.dur -= 2; SFX.miss(); return; }
@@ -359,7 +365,7 @@
     if (t.rare && ((G.t * 6 + f.wob) % 2) < 1) { var sx = Math.round(f.x + Math.sin(G.t * 5 + f.wob) * 8), sy = Math.round(f.y - 6 + Math.cos(G.t * 4) * 3); R(sx, sy - 1, 1, 3, PAL.white); R(sx - 1, sy, 3, 1, PAL.white); }
   }
   function drawNet(p) {
-    var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = p.lift > 0;
+    var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = !p.dn;
     if (p.broken > 0) {
       var ox = x, oy = y; // torn frame: dashed ring + shreds
       ctx.fillStyle = PAL.stone2;
@@ -371,7 +377,7 @@
     }
     if (up) { // floating above water: shadow + raised net
       for (var yy = -NET_R; yy <= NET_R; yy += 2) { var w = Math.floor(Math.sqrt(NET_R * NET_R - yy * yy)); R(x - w + 3, y + yy + 5, w * 2, 1, PAL.deep); }
-      y -= 5;
+      y -= p.lift > 0 ? 9 : 5;
     } else {
       circleDither(x, y, NET_R, PAL.hi, 0);
       var rr = Math.floor((G.t * 10) % 3); circleOutline(x, y, NET_R + 2 + rr, PAL.hi);
