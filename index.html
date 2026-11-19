@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect x=%272%27 y=%276%27 width=%2710%27 height=%274%27 fill=%27%23ff9a2e%27/%3E%3Crect x=%270%27 y=%275%27 width=%273%27 height=%276%27 fill=%27%23ffd23f%27/%3E%3C/svg%3E">
+<title>撈金魚 · 像素夜市</title>
+<style>
+@font-face{font-family:Fusion;src:url(fonts/fusion-subset.woff2) format('woff2');font-display:block}
+html,body{margin:0;height:100%;background:#0a0716;overflow:hidden}
+body{display:flex;align-items:center;justify-content:center}
+canvas{display:block;image-rendering:pixelated;image-rendering:crisp-edges;width:min(100vw,177.7778vh);height:auto;aspect-ratio:16/9;background:#000}
+</style>
+</head>
+<body>
+<canvas id="c" width="320" height="180"></canvas>
+<script src="vendor/noble-secp256k1.min.js"></script>
+<script src="vendor/qrcode.js"></script>
+<script src="relay.js"></script>
+<script src="host.js"></script>
+</body>
+</html>
