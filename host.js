@@ -134,7 +134,9 @@
     return { i: i, cid: null, lastSeen: 0, lastSeq: -1, cx: null, cy: null, lastRc: 0, ready: false, motion: false, lastSn: 0, lastStr: 0, dn: false, downT: 0, ign: -1,
       x: i ? 240 : 80, y: 110, tx: i ? 240 : 80, ty: 110, lift: 0, cool: 0, dur: 100, broken: 0, score: 0, caught: { s: 0, b: 0, r: 0 }, speed: 0 };
   }
-  var G = { phase: 'lobby', players: [newPlayer(0), newPlayer(1)], fish: [], fx: [], pops: [], ev: [], evId: 1, tLeft: DURATION, cd: 0, cdT: 0, winner: null, t: 0, relay: { open: 0, total: 4 }, hostRx: 0, round: 0 };
+  var BEST_KEY = 'gf-best-1p', bestInit = 0; try { bestInit = +localStorage.getItem(BEST_KEY) || 0; } catch (e) {}
+  var G = { phase: 'title', mode: 0, sel: 0, btns: [], best: bestInit, newBest: false, players: [newPlayer(0), newPlayer(1)], fish: [], fx: [], pops: [], ev: [], evId: 1, tLeft: DURATION, cd: 0, cdT: 0, winner: null, t: 0, relay: { open: 0, total: 4 }, hostRx: 0, round: 0 };
+  function cap() { return G.mode === 1 ? 1 : 2; }
   function connected(p) { return p.cid && (Date.now() - p.lastSeen) < 3500; }
 
   function rnd(a, b) { return a + Math.random() * (b - a); }
@@ -156,11 +158,26 @@
     G.players.forEach(function (p, i) { var n = newPlayer(i); ['cid', 'lastSeen', 'lastSeq', 'cx', 'cy', 'lastRc', 'motion', 'lastSn'].forEach(function (k) { n[k] = p[k]; }); G.players[i] = n; });
     resetFish(); G.fx = []; G.pops = []; G.winner = null; G.tLeft = DURATION; G.phase = 'countdown'; G.cd = 3; G.cdT = 0; SFX.beep();
   }
+  function chooseMode(m) {
+    unlock(); G.mode = m;
+    if (m === 1) {
+      var a = G.players[0], b = G.players[1];
+      if (!a.cid && b.cid) { var n0 = newPlayer(0); ['cid', 'lastSeen', 'lastSeq', 'cx', 'cy', 'lastRc', 'motion', 'lastSn'].forEach(function (k) { n0[k] = b[k]; }); G.players[0] = n0; G.players[1] = newPlayer(1); }
+      else if (b.cid) { var old = b.cid; G.players[1] = newPlayer(1); hub.send({ k: 'full', c: old, md: 1 }); }
+    }
+    G.players.forEach(function (p) { p.ready = false; p.score = 0; p.caught = { s: 0, b: 0, r: 0 }; p.dur = 100; p.broken = 0; p.dn = false; });
+    G.winner = null; G.phase = 'lobby'; SFX.ready(); broadcast();
+  }
+  function toTitle() {
+    G.phase = 'title'; G.mode = 0; G.winner = null; G.players.forEach(function (p) { p.ready = false; p.dn = false; p.lift = 0; p.score = 0; p.caught = { s: 0, b: 0, r: 0 }; p.dur = 100; p.broken = 0; }); SFX.join(); broadcast();
+  }
   function finish() {
     G.phase = 'end'; G.players.forEach(function (p) { p.ready = false; p.lift = 0; });
     var a = G.players[0].score, b = G.players[1].score; G.winner = a === b ? -1 : (a > b ? 0 : 1);
+    G.newBest = false;
+    if (G.mode === 1) { G.winner = null; if (a > G.best) { G.best = a; G.newBest = a > 0; try { localStorage.setItem(BEST_KEY, String(a)); } catch (e) {} } }
     G.endT = 0; G.conf = []; for (var i = 0; i < 70; i++) G.conf.push({ x: rnd(0, W), y: rnd(-120, 0), v: rnd(30, 70), c: [PAL.gold, PAL.pink, PAL.lime, PAL.hi, PAL.white][i % 5], w: Math.random() * 6 });
-    SFX.end(); setTimeout(function () { if (G.winner >= 0) SFX.win(); }, 650);
+    SFX.end(); setTimeout(function () { if (G.mode === 1 ? G.newBest : G.winner >= 0) SFX.win(); }, 650);
   }
 
   /* ---------- relay ---------- */
@@ -175,18 +192,18 @@
     var now = Date.now(), i = slotOf(m.c), p;
     G.rx = G.rx || {}; G.rx[m.k + ':' + (i < 0 ? '?' : i)] = (G.rx[m.k + ':' + (i < 0 ? '?' : i)] || 0) + 1;
     if (m.k === 'hi') {
-      if (i < 0) { for (var j = 0; j < 2; j++) if (!G.players[j].cid) { i = j; break; } }
+      if (i < 0) { for (var j = 0; j < cap(); j++) if (!G.players[j].cid) { i = j; break; } }
       if (i < 0) { // stale slot reuse: take over a slot whose phone vanished for >20s outside play
-        for (j = 0; j < 2; j++) if (now - G.players[j].lastSeen > 20000 && G.phase !== 'play') { i = j; break; }
+        for (j = 0; j < cap(); j++) if (now - G.players[j].lastSeen > 20000 && G.phase !== 'play') { i = j; break; }
       }
-      if (i < 0) { hub.send({ k: 'full', c: m.c }); return; }
+      if (i < 0) { hub.send({ k: 'full', c: m.c, md: G.mode }); return; }
       p = G.players[i];
       var wasConn = connected(p) && p.cid === m.c;
       p.cid = m.c; p.lastSeen = now; p.lastSeq = -1; p.cx = null; p.cy = null; p.lastRc = m.rc | 0; p.lastSn = m.sn | 0; p.motion = !!m.mo; p.ign = -1; p.dn = false; p.downT = 0;
       if (!wasConn) SFX.join();
       broadcast(); return;
     }
-    if (i < 0) { hub.send({ k: 'full', c: m.c }); return; }
+    if (i < 0) { hub.send({ k: 'full', c: m.c, md: G.mode }); return; }
     p = G.players[i];
     if (m.k === 'sc') { onScoopMsg(m); return; }
     if (m.k !== 'in') return;
@@ -216,7 +233,7 @@
 
   function snapshot() {
     return {
-      k: 'st', rm: room, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
+      k: 'st', rm: room, ph: G.phase, md: G.mode, bs: G.best, nw: G.newBest ? 1 : 0, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
       pl: G.players.map(function (p) { return { c: p.cid, on: connected(p) ? 1 : 0, rd: p.ready ? 1 : 0, du: Math.max(0, Math.round(p.dur)), br: Math.ceil(p.broken * 10) / 10, lf: p.lift > 0 ? 1 : 0, dn: p.dn ? 1 : 0, mo: p.motion ? 1 : 0, sc: p.score, cs: p.caught.s, cb: p.caught.b, cr: p.caught.r }; }),
       ev: G.ev.map(function (e) { return { id: e.id, s: e.s, p: e.p, y: e.y }; })
     };
@@ -315,8 +332,8 @@
     G.fx.forEach(function (e) { e.t += dt; }); G.fx = G.fx.filter(function (e) { return e.t < .8; });
     G.pops.forEach(function (e) { e.t += dt; }); G.pops = G.pops.filter(function (e) { return e.t < 1.1; });
     if (G.phase === 'lobby' || G.phase === 'end') {
-      var both = G.players.every(function (p) { return connected(p) && p.ready; });
-      if (both) startCountdown();
+      var both = G.players.slice(0, cap()).every(function (p) { return connected(p) && p.ready; });
+      if (G.phase === 'lobby' && both) startCountdown(); else if (G.phase === 'end' && both) startCountdown();
       if (G.phase === 'end') { G.endT += dt; (G.conf || []).forEach(function (c) { c.y += c.v * dt; if (c.y > H) c.y = -5; }); }
     } else if (G.phase === 'countdown') {
       G.cdT += dt; if (G.cdT >= 1) { G.cdT -= 1; G.cd--; if (G.cd > 0) SFX.beep(); else { G.phase = 'play'; G.tLeft = DURATION; SFX.go(); broadcast(); } }
@@ -329,12 +346,27 @@
   setInterval(step, 33);
 
   addEventListener('keydown', function (e) {
-    if (e.key === 'Enter' || e.key === ' ') {
-      if (G.phase === 'lobby' && G.players.some(connected)) startCountdown();
+    var k = e.key;
+    if (G.phase === 'title') {
+      if (k === 'ArrowLeft' || k === 'ArrowUp') { G.sel = 0; SFX.join(); } else if (k === 'ArrowRight' || k === 'ArrowDown') { G.sel = 1; SFX.join(); }
+      else if (k === '1') chooseMode(1); else if (k === '2') chooseMode(2);
+      else if (k === 'Enter' || k === ' ') chooseMode(G.sel + 1);
+    } else if (k === 'Enter' || k === ' ') {
+      if (G.phase === 'lobby' && G.players.slice(0, cap()).some(connected)) startCountdown();
       else if (G.phase === 'end') startCountdown();
-    } else if (e.key === 'm' || e.key === 'M') muted = !muted;
-    else if (e.key === 'f' || e.key === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }
+    } else if ((k === 'Escape' || k === 'Backspace') && (G.phase === 'lobby' || G.phase === 'end')) toTitle();
+    if (k === 'm' || k === 'M') muted = !muted;
+    else if (k === 'f' || k === 'F') { if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }
   });
+  function toCanvas(e) { var r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+  function hitBtn(p) { for (var i = 0; i < G.btns.length; i++) { var b = G.btns[i]; if (p.x >= b.x && p.x < b.x + b.w && p.y >= b.y && p.y < b.y + b.h) return b; } return null; }
+  function act(id) {
+    if (id === 'p1') chooseMode(1); else if (id === 'p2') chooseMode(2);
+    else if (id === 'back') toTitle();
+    else if (id === 'again' && G.phase === 'end') startCountdown();
+  }
+  cv.addEventListener('pointermove', function (e) { if (G.phase !== 'title') return; var b = hitBtn(toCanvas(e)); if (b && b.id === 'p1' && G.sel !== 0) { G.sel = 0; SFX.join(); } else if (b && b.id === 'p2' && G.sel !== 1) { G.sel = 1; SFX.join(); } });
+  cv.addEventListener('pointerdown', function (e) { var b = hitBtn(toCanvas(e)); if (b) { e.preventDefault(); act(b.id); } });
 
   /* ---------- render ---------- */
   function drawFish(f) {
@@ -368,7 +400,7 @@
   }
   function hud() {
     R(0, 0, W, 24, PAL.ink); R(0, 24, W, 1, PAL.stone);
-    G.players.forEach(function (p, i) {
+    G.players.slice(0, cap()).forEach(function (p, i) {
       var left = i === 0, x0 = left ? 5 : W - 5, on = connected(p), al = left ? 'l' : 'r';
       var w = T(PNAME[i], x0, 0, PCOL[i], { al: al });
       var dotx = left ? x0 + w + 3 : x0 - w - 6;
@@ -393,30 +425,78 @@
   }
   var qrCache = null;
   function qrImage() {
-    if (!qrCache) { qrCache = document.createElement('canvas'); qrCache.width = qrCache.height = 140; var save = ctx; ctx = qrCache.getContext('2d'); var s = drawQR(0, 0, 3); ctx = save; qrCache.w = s; }
+    if (!qrCache) { qrCache = document.createElement('canvas'); qrCache.width = qrCache.height = 140; var save = ctx; ctx = qrCache.getContext('2d'); var s = drawQR(0, 0, 2); ctx = save; qrCache.w = s; }
     return qrCache;
   }
 
-  function lobby() {
-    ctx.fillStyle = 'rgba(11,16,42,.78)'; ctx.fillRect(0, 25, W, H - 25);
-    T('撈金魚', 160, 25, PAL.gold, { al: 'c', sc: 2, sh: PAL.dred });
-    var q = qrImage(), qw = q.w; panel(6, 59, qw + 8, qw + 8, PAL.stone2);
-    ctx.drawImage(q, 0, 0, qw, qw, 10, 63, qw, qw);
-    var px = 134;
-    T('手機掃左邊 QR 加入', px, 56, PAL.hi, {});
-    T('房間碼 ' + room, px, 71, PAL.gold, {});
-    G.players.forEach(function (p, i) {
-      var y = 85 + i * 32, on = connected(p);
-      panel(px, y, 180, 28, PCOL[i]);
-      T(PNAME[i], px + 6, y + 2, PCOL[i], {});
-      R(px + 30, y + 7, 4, 4, p.cid ? (on ? PAL.lime : PAL.red) : PAL.stone2);
-      var st = !p.cid ? '等待加入…' : (!on ? '離線 (可重連)' : (p.ready ? 'READY!' : (p.motion ? '感應就緒' : '已連線')));
-      T(st, px + 38, y + 2, p.ready && on ? PAL.lime : (on ? PAL.cream : PAL.stone3), {});
-      T(!p.cid || !on || p.ready ? '' : (p.motion ? '按 READY' : '按「開始」'), px + 178, y + 2, PAL.gold, { al: 'r' });
+  function outlineT(s, x, y, col, o) { // chunky pixel title text: ink outline + shadow + fill
+    o = o || {}; var sc = o.sc || 1;
+    [[-sc, 0], [sc, 0], [0, -sc], [0, sc], [-sc, -sc], [sc, sc], [-sc, sc], [sc, -sc]].forEach(function (d) { T(s, x + d[0], y + d[1], PAL.ink, { al: o.al, sc: sc }); });
+    T(s, x, y, col, { al: o.al, sc: sc, sh: o.sh });
+  }
+  function miniNet(x, y, col, r, wob) { // tiny paper net icon
+    x = Math.round(x); y = Math.round(y + (wob || 0));
+    circleDither(x, y, r - 1, PAL.white, 1); circleDither(x, y, r - 1, PAL.cream, 0); circleOutline(x, y, r, col); circleOutline(x, y, r - 1, col);
+    for (var k = 0; k < r - 1; k++) R(x + r - 2 + k, y + r - 2 + k, 2, 2, k < 2 ? col : PAL.wood);
+  }
+  function button(id, x, y, w, h, selected, blink) {
+    G.btns.push({ id: id, x: x, y: y, w: w, h: h });
+    var on = selected && (!blink || ((G.t * 5) | 0) % 2 === 0);
+    R(x - 2, y - 2, w + 4, h + 4, PAL.ink); R(x - 1, y - 1, w + 2, h + 2, selected ? (on ? PAL.gold : PAL.gold2) : PAL.stone2);
+    R(x, y, w, h, selected ? PAL.deep : PAL.ink); R(x + 1, y + 1, w - 2, 1, selected ? PAL.light : PAL.stone);
+  }
+  function title() {
+    ctx.fillStyle = 'rgba(11,16,42,.28)'; ctx.fillRect(0, 0, W, H);
+    // waving banner of ripples around the logo
+    var bob = Math.round(Math.sin(G.t * 2) * 2);
+    for (var i = 0; i < 3; i++) { var rr = 36 + ((G.t * 14 + i * 22) % 66); if (rr < 100) circleOutline(160, 44, rr, i % 2 ? PAL.hi : PAL.light); }
+    // a goldfish circling the logo
+    var ang = G.t * 0.7, fx = 160 + Math.cos(ang) * 118, fy = 44 + Math.sin(ang) * 30, hd = Math.atan2(Math.cos(ang) * 30, -Math.sin(ang) * 118);
+    var e = FishSprite.get('g', hd, 0, ((G.t * 6) | 0) & 3, 1); ctx.drawImage(e.sh, Math.round(fx) - e.R + 2, Math.round(fy) - e.R + 3); ctx.drawImage(e.c, Math.round(fx) - e.R, Math.round(fy) - e.R);
+    var ang2 = ang + 3.1, fx2 = 160 + Math.cos(ang2) * 118, fy2 = 44 + Math.sin(ang2) * 30, hd2 = Math.atan2(Math.cos(ang2) * 30, -Math.sin(ang2) * 118);
+    var e2 = FishSprite.get('b', hd2, 0, ((G.t * 5) | 0) & 3, 0); ctx.drawImage(e2.sh, Math.round(fx2) - e2.R + 2, Math.round(fy2) - e2.R + 3); ctx.drawImage(e2.c, Math.round(fx2) - e2.R, Math.round(fy2) - e2.R);
+    // logo
+    outlineT('撈金魚', 160, 14 + bob, PAL.gold, { al: 'c', sc: 4, sh: PAL.dred });
+    T('GOLDFISH SCOOP', 160, 74, PAL.hi, { al: 'c', sh: PAL.ink });
+    ctx.drawImage(NetSprite.get(0, PAL.pink, false), 28 - NetSprite.C, 36 + bob - NetSprite.C);
+    ctx.drawImage(NetSprite.get(0, PAL.lime, false), 292 - NetSprite.C, 36 - bob - NetSprite.C);
+    // two choices
+    var bw = 116, bh = 50, by = 100, xs = [34, 170];
+    [['p1', '1P', '練習'], ['p2', '2P', '對戰']].forEach(function (c, i) {
+      var sel = G.sel === i, x = xs[i], dy = sel ? Math.round(Math.sin(G.t * 6) * 1) : 0;
+      button(c[0], x, by + dy, bw, bh, sel, true);
+      if (i === 0) miniNet(x + 24, by + dy + 25, PAL.pink, 11, 0); else { miniNet(x + 17, by + dy + 25, PAL.pink, 9, 0); miniNet(x + 33, by + dy + 25, PAL.lime, 9, 0); }
+      T(c[1], x + 56, by + dy + 6, sel ? PAL.gold : PAL.white, { sc: 2, sh: PAL.dred });
+      T(c[2], x + 58, by + dy + 30, sel ? PAL.cream : PAL.stone3, {});
+      if (sel && ((G.t * 3) | 0) % 2 === 0) { R(x - 8, by + dy + 24, 4, 7, PAL.gold); R(x - 4, by + dy + 26, 2, 3, PAL.gold); }
     });
-    T('雙方 READY 即開始 · Enter 強制'.replace('雙方 ', ''), px, 162, PAL.cream, {});
-    T(base.replace(/^https?:\/\//, '').replace(/\/$/, '').slice(0, 40), px, 148, PAL.stone3, {});
-    if (!AC || AC.state !== 'running') T('按任意鍵開啟音效', W - 5, 27, PAL.stone3, { al: 'r' });
+    if (G.best > 0) { T('★ ' + G.best, 92, 154, PAL.gold, { al: 'c' }); }
+    T('點選 · ← → · Enter', 160, 166, PAL.stone3, { al: 'c' });
+    if (!AC || AC.state !== 'running') T('♪', W - 6, 168, PAL.stone3, { al: 'r' });
+  }
+  function slotCard(i, x, y, w, h) {
+    var p = G.players[i], on = connected(p);
+    panel(x, y, w, h, PCOL[i]);
+    miniNet(x + 15, y + h / 2, PCOL[i], 9, 0);
+    R(x + 30, y + h / 2 - 2, 4, 4, p.cid ? (on ? PAL.lime : PAL.red) : PAL.stone2);
+    var st = !p.cid ? (((G.t * 2) | 0) % 2 ? '…' : '  …') : (!on ? '離線' : (p.ready ? 'READY!' : (p.motion ? '感應就緒' : '已連線')));
+    T(st, x + 40, y + h / 2 - 6, p.ready && on ? PAL.lime : (on ? PAL.cream : PAL.stone3), {});
+    if (p.cid && on && !p.ready) T(p.motion ? '按 READY' : '按「開始」', x + w - 4, y + h / 2 - 6, PAL.gold, { al: 'r' });
+  }
+  function lobby() {
+    ctx.fillStyle = 'rgba(11,16,42,.72)'; ctx.fillRect(0, 25, W, H - 25);
+    button('back', 6, 30, 46, 14, false, false); T('< 返回', 29, 31, PAL.cream, { al: 'c' });
+    var one = G.mode === 1;
+    outlineT(one ? '1P 練習' : '2P 對戰', 160, 30, PAL.gold, { al: 'c', sc: 2, sh: PAL.dred });
+    var q = qrImage(), qw = q.w, qx = 44, qy = 62;
+    panel(qx - 4, qy - 4, qw + 8, qw + 8, PAL.stone2); ctx.drawImage(q, 0, 0, qw, qw, qx, qy, qw, qw);
+    // little phone icon + room code under the QR
+    var cy = qy + qw + 10; R(qx + 2, cy, 6, 10, PAL.stone3); R(qx + 3, cy + 1, 4, 7, PAL.ink); R(qx + 4, cy + 9, 2, 1, PAL.stone2);
+    T(room, qx + 12, cy - 1, PAL.gold, {});
+    var sx = 140, sw = 168;
+    if (one) slotCard(0, sx, 74, sw, 32); else { slotCard(0, sx, 62, sw, 32); slotCard(1, sx, 100, sw, 32); }
+    T(one ? 'READY 開始' : '雙方 READY 開始', sx + sw / 2, 148, PAL.cream, { al: 'c' });
+    if (!AC || AC.state !== 'running') T('♪', W - 6, 168, PAL.stone3, { al: 'r' });
   }
   function countdown() {
     ctx.fillStyle = 'rgba(11,16,42,.45)'; ctx.fillRect(0, 25, W, H - 25);
@@ -426,19 +506,29 @@
   }
   function results() {
     ctx.fillStyle = 'rgba(11,16,42,.8)'; ctx.fillRect(0, 25, W, H - 25);
-    (G.conf || []).forEach(function (c) { if (G.winner >= 0) R(c.x + Math.sin(G.t * 2 + c.w) * 3, c.y, 2, 2, c.c); });
-    T('時間到!', 160, 28, PAL.gold, { al: 'c', sc: 2, sh: PAL.dred });
-    var w = G.winner;
-    T(w < 0 ? '平手!' : PNAME[w] + ' 獲勝!', 160, 54, w < 0 ? PAL.cream : PCOL[w], { al: 'c', sc: 2, sh: PAL.ink });
-    G.players.forEach(function (p, i) {
-      var x = 22 + i * 148, win = w === i; panel(x, 82, 128, 62, win ? PCOL[i] : PAL.stone);
-      T(PNAME[i] + (win ? ' ★' : ''), x + 8, 86, PCOL[i], {});
-      T(String(p.score), x + 120, 88, PAL.white, { al: 'r', sc: 2, sh: PAL.dred });
-      T('小魚 ×' + p.caught.s + '  大魚 ×' + p.caught.b, x + 8, 112, PAL.cream, {});
-      T('稀有 ×' + p.caught.r, x + 8, 126, PAL.gold, {});
-    });
-    T('雙方手機按 READY 或 Enter 再玩一次', 160, 152, PAL.cream, { al: 'c' });
-    T('房間碼 ' + room, 160, 166, PAL.stone3, { al: 'c' });
+    (G.conf || []).forEach(function (c) { if (G.mode === 1 ? G.newBest : G.winner >= 0) R(c.x + Math.sin(G.t * 2 + c.w) * 3, c.y, 2, 2, c.c); });
+    outlineT('時間到!', 160, 28, PAL.gold, { al: 'c', sc: 2, sh: PAL.dred });
+    if (G.mode === 1) {
+      var p0 = G.players[0];
+      panel(80, 52, 160, 78, PAL.pink);
+      miniNet(102, 76, PAL.pink, 9, 0);
+      T(String(p0.score), 178, 56, PAL.white, { al: 'c', sc: 3, sh: PAL.dred });
+      T('小魚 ×' + p0.caught.s + '  大魚 ×' + p0.caught.b + '  稀有 ×' + p0.caught.r, 160, 102, PAL.cream, { al: 'c' });
+      T('★ ' + G.best + (G.newBest ? '  新紀錄!' : ''), 160, 115, G.newBest ? PAL.gold : PAL.stone3, { al: 'c' });
+    } else {
+      var w = G.winner;
+      T(w < 0 ? '平手!' : PNAME[w] + ' 獲勝!', 160, 54, w < 0 ? PAL.cream : PCOL[w], { al: 'c', sc: 2, sh: PAL.ink });
+      G.players.forEach(function (p, i) {
+        var x = 22 + i * 148, win = w === i; panel(x, 82, 128, 56, win ? PCOL[i] : PAL.stone);
+        T(PNAME[i] + (win ? ' ★' : ''), x + 8, 86, PCOL[i], {});
+        T(String(p.score), x + 120, 88, PAL.white, { al: 'r', sc: 2, sh: PAL.dred });
+        T('小魚 ×' + p.caught.s + '  大魚 ×' + p.caught.b, x + 8, 112, PAL.cream, {});
+        T('稀有 ×' + p.caught.r, x + 8, 124, PAL.gold, {});
+      });
+    }
+    T(G.mode === 1 ? '手機 READY 再玩' : '雙方 READY 再玩', 160, 138, PAL.stone3, { al: 'c' });
+    button('again', 50, 152, 100, 18, false, false); T('再玩一次', 100, 155, PAL.lime, { al: 'c' });
+    button('back', 170, 152, 100, 18, false, false); T('回標題', 220, 155, PAL.cream, { al: 'c' });
   }
 
   function render() {
@@ -449,13 +539,14 @@
     // ripples
     G.fx.forEach(function (e) { var r = 3 + Math.floor(e.t * (e.big ? 30 : 22)); if (e.t < .7) circleOutline(e.x, e.y, r, e.t < .35 ? PAL.white : PAL.hi); });
     G.fish.forEach(drawFish);
-    G.players.forEach(function (p, i) { if (G.phase !== 'lobby' || p.cid) drawNet(p); });
+    if (G.phase !== 'title') G.players.slice(0, cap()).forEach(function (p, i) { if (G.phase !== 'lobby' || p.cid) drawNet(p); });
     G.pops.forEach(function (e) { T(e.txt, e.x, e.y - e.t * 18, e.col, { al: 'c', sh: PAL.ink, sc: 1 }); });
-    hud();
-    if (G.phase === 'lobby') lobby(); else if (G.phase === 'countdown') countdown(); else if (G.phase === 'end') results();
+    G.btns = [];
+    if (G.phase !== 'title') hud();
+    if (G.phase === 'title') title(); else if (G.phase === 'lobby') lobby(); else if (G.phase === 'countdown') countdown(); else if (G.phase === 'end') results();
     requestAnimationFrame(render);
   }
   var fontsReady = (document.fonts && document.fonts.load) ? Promise.all([document.fonts.load('12px Fusion', '撈金魚abc123')]).catch(function () {}) : Promise.resolve();
   fontsReady.then(function () { tcache = {}; requestAnimationFrame(render); });
-  window.__gf = {NetSprite: NetSprite, FishSprite: FishSprite,  G: G, hub: hub, room: room, joinURL: joinURL, TYPES: TYPES, NET_R: NET_R, GAIN: GAIN, startCountdown: startCountdown };
+  window.__gf = {NetSprite: NetSprite, FishSprite: FishSprite,  G: G, hub: hub, room: room, joinURL: joinURL, TYPES: TYPES, NET_R: NET_R, GAIN: GAIN, startCountdown: startCountdown, chooseMode: chooseMode, toTitle: toTitle };
 })();

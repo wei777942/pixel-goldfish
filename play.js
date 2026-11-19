@@ -35,10 +35,12 @@
   var hub = new GFRelay.Hub({
     sub: 'gf1-' + room + '-d', pub: 'gf1-' + room + '-u',
     onmsg: function (m) {
-      if (m.k === 'full' && m.c === cid) { S.full = true; render(); return; }
+      if (m.k === 'full' && m.c === cid) { S.full = true; S.fullMd = m.md; S.joined = false; S.slot = -1; render(); return; }
       if (m.k !== 'st') return;
-      S.st = m; S.lastSt = Date.now();
+      S.st = m; S.lastSt = Date.now(); S.md = m.md;
       var i = -1; for (var j = 0; j < m.pl.length; j++) if (m.pl[j].c === cid) i = j;
+      if (i < 0 && S.joined) { S.joined = false; S.slot = -1; }                       // the big screen dropped us (e.g. switched to 1P): ask again
+      if (S.full && i < 0 && m.md !== 1 && m.pl.some(function (p) { return !p.c; })) { S.full = false; hi(); }   // a seat opened up
       if (i >= 0) { if (!S.joined || S.slot !== i) { S.joined = true; S.slot = i; S.full = false; $('app').style.setProperty('--pc', PCOL[i]); document.documentElement.style.setProperty('--pc', PCOL[i]); } }
       if (m.ph !== S.lastPhase) { if (m.ph === 'countdown' && S.mode === 'run') calibrate(); S.lastPhase = m.ph; }
       events(m); render();
@@ -79,6 +81,7 @@
     if (typeof e.beta !== 'number' || typeof e.gamma !== 'number') return;
     var u = upFrom(e.beta, e.gamma), now = Date.now();
     S.orient++; S.lastOri = now;
+    if (S.mode === 'bad' && S.badReason === 'lost') { S.badReason = null; setTimeout(finishStart, 0); }
     if (!S.u) S.u = u; else { var a = 0.4; S.u = norm([S.u[0] + (u[0] - S.u[0]) * a, S.u[1] + (u[1] - S.u[1]) * a, S.u[2] + (u[2] - S.u[2]) * a]); }
     if (S.calAcc) S.calAcc.push(u);
   }
@@ -271,12 +274,12 @@
   function render() {
     var m = S.st, me = m && S.slot >= 0 ? m.pl[S.slot] : null, now = Date.now();
     var hostOn = m && now - S.lastSt < 3500;
-    $('pname').textContent = S.full ? '房間已滿' : S.slot >= 0 ? 'P' + (S.slot + 1) + (S.slot ? ' 綠' : ' 粉') : (S.relayOn ? '加入中…' : '連線中…');
+    $('pname').textContent = S.full ? '房間已滿' : S.slot >= 0 ? (S.md === 1 ? '1P 練習' : 'P' + (S.slot + 1) + (S.slot ? ' 綠' : ' 粉')) : (S.relayOn ? '加入中…' : '連線中…');
     var c;
     if (!S.relayOn) c = ['off', '中繼離線 · 重連中…']; else if (!hostOn) c = ['warn', S.joined ? '大螢幕無回應 · 重連中…' : '尋找大螢幕…']; else c = ['on', '已連線 · 房間 ' + room];
     $('app').classList.toggle('offline', !S.relayOn || !hostOn);
     $('conn').innerHTML = '<span class="dot ' + c[0] + '"></span>' + c[1];
-    if (!me || !hostOn) { $('ready').style.display = 'none'; $('hint').style.display = ''; $('msg').textContent = S.full ? '這個房間已有兩位玩家' : ''; if (!me) return; }
+    if (!me || !hostOn) { $('ready').style.display = 'none'; $('hint').style.display = ''; $('msg').textContent = S.full ? (S.fullMd === 1 ? '1P 練習 · 已有玩家' : '這個房間已有兩位玩家') : ''; if (!me) return; }
     $('sc').textContent = me.sc;
     var ph = m.ph, tl = Math.ceil(m.t);
     $('tm').textContent = ph === 'play' ? (tl + 's') : ph === 'countdown' ? m.cd : ph === 'end' ? '0s' : '--';
@@ -284,20 +287,25 @@
     var playing = ph === 'play';
     var showReady = (ph === 'lobby' || ph === 'end') && hostOn && S.mode === 'run';
     $('ready').style.display = showReady ? 'block' : 'none'; $('hint').style.display = showReady ? 'none' : 'flex';
-    $('ready').disabled = !!me.rd; $('ready').textContent = me.rd ? 'READY! 等對手' : 'READY';
+    $('ready').disabled = !!me.rd; $('ready').textContent = me.rd ? (S.md === 1 ? 'READY!' : 'READY! 等對手') : 'READY';
     var msg = '';
     if (S.calAcc) msg = '校正中…請握穩不要動';
-    else if (ph === 'lobby') msg = me.rd ? '等待另一位玩家 READY…' : '握穩手機，準備好就按 READY';
+    else if (ph === 'lobby') msg = me.rd ? (S.md === 1 ? '' : '等待另一位玩家 READY…') : '握穩手機，準備好就按 READY';
     else if (ph === 'countdown') msg = '準備!（倒數時自動校正）';
     else if (playing) msg = me.br > 0 ? '紙網破了…等新網' : '傾斜移動 · 超過入水環入水 · 回到回收環內撈起';
-    $('msg').textContent = hostOn && S.calAcc ? '校正中…' : '';
+    $('msg').textContent = hostOn && S.calAcc ? '校正中…' : ph === 'title' ? '請在大螢幕選擇模式' : '';
     $('tilt').classList.toggle('act', (S.ring || 0) > USER.dead);
     var over = $('over');
     if (ph === 'end') {
       var w = m.w, me2 = m.pl[S.slot], other = m.pl[1 - S.slot];
+      if (m.md === 1) {
+        $('overh').textContent = m.nw ? '新紀錄!' : '時間到!'; $('overh').style.color = m.nw ? '#ffd23f' : '#fff4d6';
+        $('overp').innerHTML = '<b style="color:' + PCOL[S.slot] + ';font-size:64px;font-weight:normal">' + me2.sc + '</b><br><small>★ ' + m.bs + '　小×' + me2.cs + ' 大×' + me2.cb + ' 稀有×' + me2.cr + '</small>';
+      } else {
       $('overh').textContent = w === -1 ? '平手!' : w === S.slot ? '你贏了!' : '你輸了…';
       $('overh').style.color = w === S.slot ? '#ffd23f' : w === -1 ? '#fff4d6' : '#9aa3c7';
       $('overp').innerHTML = '你 <b style="color:' + PCOL[S.slot] + '">' + me2.sc + '</b> 分 vs 對手 ' + other.sc + ' 分<br><small>小×' + me2.cs + ' 大×' + me2.cb + ' 稀有×' + me2.cr + '</small>';
+      }
       over.style.display = 'flex'; over.style.pointerEvents = 'none';
       var rb = $('actrow').getBoundingClientRect(); over.style.height = Math.max(200, rb.top - 6) + 'px';
     } else over.style.display = 'none';
