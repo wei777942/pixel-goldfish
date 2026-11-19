@@ -239,7 +239,7 @@
       ev: G.ev.map(function (e) { return { id: e.id, s: e.s, p: e.p, y: e.y }; })
     };
   }
-  function broadcast() { hub.send(snapshot()); }
+  function broadcast() { hub.send(snapshot(), true); }  // droppable: relays that rate-limit us get skipped, others carry it
   setInterval(broadcast, 200);
 
   /* ---------- update ---------- */
