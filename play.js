@@ -22,8 +22,8 @@
   // dip: ring number beyond which the net goes into the water; ret: ring number you must come back inside for the scoop;
   // sens: net speed gain; dead: deadzone ring (no net movement inside it); wspeed: in-water move speed relative to above water
   var DPR = 3;
-  var DEF = { dip: 4.0, ret: 3.0, sens: 1, dead: 1.0, wspeed: 0.6 };
-  var USER = (function () { var u = {}, s = null; try { s = JSON.parse(localStorage.getItem('gf-tune-v5c') || 'null'); } catch (e) {} for (var k in DEF) u[k] = s && typeof s[k] === 'number' ? s[k] : DEF[k]; return u; })();
+  var DEF = { dip: 4.0, ret: 3.0, sens: 1, dead: 1.0, wspeed: 0.15 };
+  var USER = (function () { var u = {}, s = null; try { s = JSON.parse(localStorage.getItem('gf-tune-v5c') || 'null'); } catch (e) {} for (var k in DEF) u[k] = s && typeof s[k] === 'number' ? s[k] : DEF[k]; if (s && s.wspeed === 0.6) u.wspeed = DEF.wspeed; /* old default saved by v5: take the new one */ return u; })();
   function saveUser() { try { localStorage.setItem('gf-tune-v5c', JSON.stringify(USER)); } catch (e) {} }
   function ringOf(mag) { return Math.asin(Math.min(1, mag)) * 57.29578 / DPR; }   // tilt magnitude (~sin angle) -> ring number (decimal)
   var S = { slot: -1, st: null, lastSt: 0, joined: false, full: false, relayOn: false, seq: 0, cx: 0, cy: 0, rc: 0, sn: 0, ss: 0,
@@ -157,7 +157,7 @@
       else spd = TUNE.vmax * USER.sens * Math.pow(Math.min(1, (ring - deadR) / Math.max(0.3, dipR - deadR)), 1.3);
       tvx = tx / mag * spd; tvy = ty / mag * spd;
     }
-    var k = 1 - Math.exp(-dt * 12); S.vx += (tvx - S.vx) * k; S.vy += (tvy - S.vy) * k;
+    var k = 1 - Math.exp(-dt * (S.down && now - S.downAt < 400 ? 6 : 12)); S.vx += (tvx - S.vx) * k; S.vy += (tvy - S.vy) * k;   // slower velocity blend just after dipping: no lurch
     if (Math.abs(S.vx) > 0.4 || Math.abs(S.vy) > 0.4) { S.cx += S.vx * dt; S.cy += S.vy * dt; S.dirty = true; }
     // the big screen says the net is not in the water any more (broke / round over): drop our in-water state
     var me = S.st && S.slot >= 0 ? S.st.pl[S.slot] : null;
@@ -306,7 +306,7 @@
   if (navigator.wakeLock) { var wl = function () { navigator.wakeLock.request('screen').catch(function () {}); }; wl(); document.addEventListener('visibilitychange', function () { if (!document.hidden) wl(); }); }
     /* ================= hidden tuning panel (gear icon, bottom-right corner of the play area) ================= */
   var SPECS = [['dip', '入水環', 1, 9.5, 0.1, ' 環', 1], ['ret', '回收環', 0.5, 9, 0.1, ' 環', 1], ['sens', '傾斜靈敏度', 0.4, 2.5, 0.05, '×', 2],
-    ['dead', '死區環', 0.2, 3, 0.1, ' 環', 1], ['wspeed', '水中移動速度', 0.2, 1.2, 0.05, '×', 2]];
+    ['dead', '死區環', 0.2, 3, 0.1, ' 環', 1], ['wspeed', '水中移動速度', 0.05, 1.2, 0.05, '×', 2]];
   (function buildPanel() {
     var t = $('tune'), h = '<div class="hd"><div id="pst" class="up"></div><b id="tl-big">0.0</b><b style="flex:1;color:#9aa3c7;font-size:15px">每環 ' + DPR + '°</b><button id="tclose">關閉</button></div>';
     SPECS.forEach(function (s, i) { h += '<div class="row' + (i < 2 ? ' main' + i : '') + '"><label for="tn-' + s[0] + '">' + s[1] + '</label><output id="to-' + s[0] + '"></output><input type="range" id="tn-' + s[0] + '" min="' + s[2] + '" max="' + s[3] + '" step="' + s[4] + '"></div>'; });

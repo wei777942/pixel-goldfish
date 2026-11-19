@@ -3,7 +3,7 @@ from playwright.async_api import async_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:34567/'
 TAG = sys.argv[2] if len(sys.argv) > 2 else 'v2dev'
-SH = '/workspace/goldfish/shots/' if TAG in ('v2', 'v3', 'v4', 'v5') else '/workspace/goldfish/shots_dev/'
+SH = '/workspace/goldfish/shots/' if TAG in ('v2', 'v3', 'v4', 'v5', 'v5_1') else '/workspace/goldfish/shots_dev/'
 log = lambda *a: print(f'[{time.strftime("%H:%M:%S")}]', *a, flush=True)
 
 # synthetic phone sensors: orientation @60Hz + motion with optional flick pulse; inv=iOS-style inverted accel sign
@@ -124,8 +124,17 @@ async def main():
         th['air_travel_9deg_sens1.0'] = await travel(9)
         await openpanel(); await setsl('tn-sens', 2.0); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3); th['air_travel_9deg_sens2.0'] = await travel(9)
         await openpanel(); await setsl('tn-sens', 1.0); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3)
-        th['water_travel_18deg_wspeed0.6'] = await travel(18)
+        th['water_travel_18deg_default_wspeed'] = await travel(18)
+        await openpanel(); await setsl('tn-wspeed', 0.6); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3); th['water_travel_18deg_wspeed0.6(old default)'] = await travel(18)
+        await openpanel(); await setsl('tn-wspeed', 0.05); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3); th['water_travel_18deg_wspeed0.05'] = await travel(18)
         await openpanel(); await setsl('tn-wspeed', 1.2); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3); th['water_travel_18deg_wspeed1.2'] = await travel(18)
+        # entry transition: net speed (units/s) sampled every 20 ms around the dip while moving above water at ring 3.3 and then stepping out to 18 deg
+        await openpanel(); await setsl('tn-wspeed', 0.15); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3)
+        await tiltg(0); await asyncio.sleep(1.0); await tiltg(10); await asyncio.sleep(1.2)
+        await pg1.evaluate("(()=>{window.__vs=[];const t0=performance.now();window.__vi=setInterval(()=>{const S=window.__gfp.S;window.__vs.push([Math.round(performance.now()-t0),Math.round(Math.hypot(S.vx,S.vy)),S.down?1:0])},20)})()")
+        await asyncio.sleep(.2); await tiltg(18); await asyncio.sleep(1.4)
+        vs = await pg1.evaluate("clearInterval(window.__vi); window.__vs"); await tiltg(0); await asyncio.sleep(.8)
+        th['entry_speed_trace_ms_units_down'] = [v for v in vs if v[0] % 100 < 20][:16]; th['entry_max_step_units_per_20ms'] = max(abs(vs[i+1][1] - vs[i][1]) for i in range(len(vs) - 1))
         await openpanel(); await setsl('tn-dead', 2.0); await pg1.locator('#tclose').tap(); await asyncio.sleep(.3); th['air_travel_4deg_dead2.0(=6deg)'] = await travel(4)
         await openpanel(); await setsl('tn-dip', 5.5); await setsl('tn-dead', 1.0); await setsl('tn-wspeed', 0.6)
         th['saved_in_localstorage'] = await pg1.evaluate("localStorage.getItem('gf-tune-v5c')")
@@ -179,8 +188,8 @@ async def main():
                     await tilt_to(pg, 1, 0, 0); await asyncio.sleep(.3); d2 = await host.evaluate("window.__gf.G.players[1].dur")
                     nowear['dur_before_after_moving_in_air'] = [d1, d2]; nowear['no_wear_above_water'] = d1 == d2; log('above-water wear check', nowear); continue
                 # --- normal play: tilt toward the fish inside the circle (above water), then tilt beyond the dip ring (net dips, still moves) and come back inside = scoop
-                if d > 34:
-                    m = min(10.5, 3 + .1 * d); await tilt_to(pg, pi, ex / d * m, ey / d * m); await asyncio.sleep(.12)
+                if d > 11:
+                    m = min(10.5, 4 + .25 * d); await tilt_to(pg, pi, ex / d * m, ey / d * m); await asyncio.sleep(.12)
                 else:
                     await tilt_to(pg, pi, 0, 0); await asyncio.sleep(.2)
                     if pi == 0 and not shots['up']:
