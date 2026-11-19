@@ -3,7 +3,7 @@ from playwright.async_api import async_playwright
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else 'http://localhost:34567/'
 TAG = sys.argv[2] if len(sys.argv) > 2 else 'v2dev'
-SH = '/workspace/goldfish/shots/' if TAG in ('v2', 'v3') else '/workspace/goldfish/shots_dev/'
+SH = '/workspace/goldfish/shots/' if TAG in ('v2', 'v3', 'v4') else '/workspace/goldfish/shots_dev/'
 log = lambda *a: print(f'[{time.strftime("%H:%M:%S")}]', *a, flush=True)
 
 # synthetic phone sensors: orientation @60Hz + motion with optional flick pulse; inv=iOS-style inverted accel sign

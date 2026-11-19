@@ -53,30 +53,12 @@
 
   /* ---------- sprites ---------- */
   function ell(g, cx, cy, rx, ry, col) { g.fillStyle = col; for (var y = -ry; y <= ry; y++) { var w = Math.round(rx * Math.sqrt(1 - (y * y) / (ry * ry + 0.0001))); g.fillRect(cx - w, cy + y, w * 2 + 1, 1); } }
-  function makeFish(len, hh, body, belly, fin, eyeCol, frame) {
-    var w = len + Math.round(len * 0.45), h = hh * 2 + 5, c = document.createElement('canvas'); c.width = w; c.height = h;
-    var g = c.getContext('2d'), cy = Math.floor(h / 2), bx = w - Math.round(len / 2) - 1;
-    // tail (left), wiggles
-    var tl = Math.round(len * 0.42), off = frame ? 1 : -1;
-    g.fillStyle = fin;
-    for (var i = 0; i < tl; i++) { var sp = Math.round(i * (hh * 0.9) / tl); g.fillRect(i, cy - sp + (i > tl / 2 ? off : 0), 1, sp * 2 + 1); }
-    ell(g, bx, cy, Math.round(len / 2), hh, body);
-    ell(g, bx + 1, cy + Math.floor(hh / 2), Math.round(len / 2) - 2, Math.max(1, Math.floor(hh / 2)), belly);
-    g.fillStyle = fin; g.fillRect(bx - 2, cy - hh - 1, Math.max(3, Math.round(len / 4)), 2); // dorsal
-    g.fillStyle = PAL.white; g.fillRect(bx + Math.round(len / 2) - 3, cy - Math.floor(hh / 3) - 1, 2, 2);
-    g.fillStyle = eyeCol; g.fillRect(bx + Math.round(len / 2) - 2, cy - Math.floor(hh / 3), 1, 1);
-    return c;
-  }
   var TYPES = {
     s: { pts: 1, len: 10, hh: 3, body: PAL.orange, belly: PAL.cream, fin: PAL.gold2, speed: [14, 24], cost: 6, n: 14 },
     b: { pts: 3, len: 19, hh: 6, body: PAL.red, belly: PAL.orange, fin: PAL.dred, speed: [9, 15], cost: 20, n: 4 },
     g: { pts: 5, len: 13, hh: 4, body: PAL.gold, belly: PAL.cream, fin: PAL.gold2, speed: [30, 42], cost: 12, n: 1, rare: 1 },
     k: { pts: 5, len: 13, hh: 4, body: PAL.blk, belly: PAL.blk2, fin: PAL.blk2, speed: [30, 42], cost: 12, n: 1, rare: 1 }
   };
-  Object.keys(TYPES).forEach(function (k) {
-    var t = TYPES[k]; t.spr = [0, 1].map(function (f) { return makeFish(t.len, t.hh, t.body, t.belly, t.fin, k === 'k' ? PAL.red : PAL.ink, f); });
-    t.spr = t.spr.map(function (c) { var f = document.createElement('canvas'); f.width = c.width; f.height = c.height; var g = f.getContext('2d'); g.translate(c.width, 0); g.scale(-1, 1); g.drawImage(c, 0, 0); return [c, f]; });
-  });
 
   /* ---------- static background ---------- */
   var BG = document.createElement('canvas'); BG.width = W; BG.height = H;
@@ -263,6 +245,14 @@
       var mx = PX0 + t.len * .6 + 2, Mx = PX1 - t.len * .6 - 2, my = PY0 + t.hh + 3, My = PY1 - t.hh - 3;
       if (f.x < mx) { f.x = mx; f.a = Math.PI - f.a; } if (f.x > Mx) { f.x = Mx; f.a = Math.PI - f.a; }
       if (f.y < my) { f.y = my; f.a = -f.a; } if (f.y > My) { f.y = My; f.a = -f.a; }
+      // visual only: heading eases toward the swim direction; turn rate bends the body, sharp turns / darts show a flank
+      var hd = Math.atan2(Math.sin(f.a) * .8, Math.cos(f.a));
+      if (f.va === undefined) { f.va = hd; f.tr = 0; f.bd = 0; }
+      var da = Math.atan2(Math.sin(hd - f.va), Math.cos(hd - f.va)), step = da * (1 - Math.exp(-dt * 6.5));
+      f.va += step; f.tr += ((step / Math.max(dt, .001)) - f.tr) * Math.min(1, dt * 12);
+      var at = Math.abs(f.tr), want = at > 2.6 ? 2 : at > .7 ? 1 : 0;
+      if (f.bump > 0 && at > 1.2) want = 2;
+      f.bd = want * (f.tr < 0 ? -1 : 1);
       f.ft += dt * (4 + sp / 8); f.frame = Math.floor(f.ft) & 1;
     });
   }
@@ -348,13 +338,13 @@
 
   /* ---------- render ---------- */
   function drawFish(f) {
-    var t = TYPES[f.type], dir = Math.cos(f.a) >= 0 ? 0 : 1, s = t.spr[f.frame][dir];
-    var bob = Math.round(Math.sin(G.t * 3 + f.wob) * .6);
+    var t = TYPES[f.type];
     if (f.dead) return;
-    // shadow
-    ctx.fillStyle = PAL.deep; var sw = s.width, sh = s.height;
-    for (var y = 0; y < sh; y += 2) ctx.fillRect(Math.round(f.x - sw / 2) + 3 + (y & 2), Math.round(f.y - sh / 2) + y + 3, sw - 6, 1);
-    ctx.drawImage(s, Math.round(f.x - sw / 2), Math.round(f.y - sh / 2) + bob);
+    var amp = (f.sp * (f.bump > 0 ? 2.2 : 1)) > 20 ? 1 : 0, wi = Math.floor(f.ft * (amp ? .8 : .5)) & 3;
+    var e = FishSprite.get(f.type, f.va === undefined ? 0 : f.va, f.bd || 0, wi, amp);
+    var bx = Math.round(f.x) - e.R, by = Math.round(f.y) - e.R, bob = Math.round(Math.sin(G.t * 3 + f.wob) * .6);
+    ctx.drawImage(e.sh, bx + 2, by + 3);   // shadow on the pond floor (dithered)
+    ctx.drawImage(e.c, bx, by + bob);
     if (t.rare && ((G.t * 6 + f.wob) % 2) < 1) { var sx = Math.round(f.x + Math.sin(G.t * 5 + f.wob) * 8), sy = Math.round(f.y - 6 + Math.cos(G.t * 4) * 3); R(sx, sy - 1, 1, 3, PAL.white); R(sx - 1, sy, 3, 1, PAL.white); }
   }
   function drawNet(p) {
@@ -467,5 +457,5 @@
   }
   var fontsReady = (document.fonts && document.fonts.load) ? Promise.all([document.fonts.load('12px Fusion', '撈金魚abc123')]).catch(function () {}) : Promise.resolve();
   fontsReady.then(function () { tcache = {}; requestAnimationFrame(render); });
-  window.__gf = {NetSprite: NetSprite,  G: G, hub: hub, room: room, joinURL: joinURL, TYPES: TYPES, NET_R: NET_R, GAIN: GAIN, startCountdown: startCountdown };
+  window.__gf = {NetSprite: NetSprite, FishSprite: FishSprite,  G: G, hub: hub, room: room, joinURL: joinURL, TYPES: TYPES, NET_R: NET_R, GAIN: GAIN, startCountdown: startCountdown };
 })();
