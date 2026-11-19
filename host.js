@@ -8,7 +8,6 @@
   var DURATION = Math.max(5, +Q.get('dur') || 60);
   var PX0 = 8, PY0 = 26, PX1 = 312, PY1 = 172;          // pond rect
   var NET_R = 13, GAIN = +Q.get('gain') || 0.5;
-  var TEAR = +Q.get('tear') || 3.3;   // snap-back speed (tilt change in rad/s) at which the paper tears
   var PAL = {
     ink: '#14102a', deep: '#0b2a5b', water: '#1456a0', water2: '#1b6ab8', light: '#2d86d6', hi: '#7cc8ff',
     stone: '#3c4166', stone2: '#6b7399', stone3: '#9aa3c7', lily: '#2e9e4f', lily2: '#5fd36b',
@@ -235,7 +234,7 @@
 
   function snapshot() {
     return {
-      k: 'st', rm: room, tr: TEAR, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
+      k: 'st', rm: room, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
       pl: G.players.map(function (p) { return { c: p.cid, on: connected(p) ? 1 : 0, rd: p.ready ? 1 : 0, du: Math.max(0, Math.round(p.dur)), br: Math.ceil(p.broken * 10) / 10, lf: p.lift > 0 ? 1 : 0, dn: p.dn ? 1 : 0, mo: p.motion ? 1 : 0, sc: p.score, cs: p.caught.s, cb: p.caught.b, cr: p.caught.r }; }),
       ev: G.ev.map(function (e) { return { id: e.id, s: e.s, p: e.p, y: e.y }; })
     };
@@ -268,9 +267,9 @@
     });
   }
 
-  function breakNet(p, violent) {
+  function breakNet(p) {
     p.broken = 3.5; p.lift = 0; p.dur = 0; p.cool = 0; p.dn = false; p.downT = 0; SFX.brk(); splash(p.x, p.y, true);
-    pop(p.x, p.y - 20, violent ? '太快!' : '破了!', PAL.red); addEvent(p.i, 0, violent ? 'v' : 'x');
+    pop(p.x, p.y - 20, '破了!', PAL.red); addEvent(p.i, 0, 'x');
   }
   function updatePlayers(dt) {
     var a = 1 - Math.exp(-dt * 14); // ease toward the (20-25 Hz) target positions
@@ -288,32 +287,26 @@
       if (G.phase !== 'play') { p.dn = false; p.downT = 0; return; }
       if (p.dn) { // net is in the water: it wears, faster when moving fast or bumped by big fish
         p.downT += dt;
-        var drain = 3.5 + Math.min(p.speed, 120) * 0.05;
-        G.fish.forEach(function (f) { if (!f.dead && f.type === 'b' && Math.hypot(f.x - p.x, f.y - p.y) < NET_R + 3) drain += 12; });
+        var drain = 2.5 + Math.min(p.speed, 120) * 0.04;
+        G.fish.forEach(function (f) { if (!f.dead && f.type === 'b' && Math.hypot(f.x - p.x, f.y - p.y) < NET_R + 3) drain += 10; });
         p.dur -= drain * dt;
-        if (p.dur <= 0) breakNet(p, false);
+        if (p.dur <= 0) breakNet(p);
       } else p.downT = 0;
     });
   }
-  // phone says: net came back to centre (the lift). str = snap-back speed (rad/s)
+  // phone says: net came back to centre = lifted out of the water (no wear out of water)
   function doScoop(p, str, q) {
     p.lastStr = str; if (typeof q === 'number') p.ign = Math.max(p.ign, q);
     var held = p.downT; p.dn = false; p.downT = 0;
     if (G.phase !== 'play' || p.broken > 0 || p.cool > 0 || held < 0.3) return;
     p.cool = .6; p.lift = .5; splash(p.x, p.y); SFX.lift();
-    if (str >= TEAR) { breakNet(p, true); return; }   // snapped back too fast: paper tears
     var rad = NET_R * 1.2, mul = 1;
     var cand = [];
     G.fish.forEach(function (f) { if (!f.dead) { var d = Math.hypot(f.x - p.x, f.y - p.y); if (d <= rad + TYPES[f.type].len * .15) cand.push([d, f]); } });
-    if (!cand.length) { p.dur -= 2; SFX.miss(); return; }
+    if (!cand.length) { SFX.miss(); return; }
     cand.sort(function (a, b) { return a[0] - b[0]; });
     cand = cand.slice(0, 3);
-    var cost = 2; cand.forEach(function (c) { cost += TYPES[c[1].type].cost * mul; });
-    if (p.dur - cost <= 0) { // too heavy: paper tears, fish escape
-      cand.forEach(function (c) { c[1].bump = 1.2; c[1].a = Math.atan2(c[1].y - p.y, c[1].x - p.x); });
-      breakNet(p, false); return;
-    }
-    p.dur -= cost; var best = 0, pts = 0;
+    var best = 0, pts = 0;
     cand.forEach(function (c, i) {
       var f = c[1], t = TYPES[f.type]; pts += t.pts; p.caught[t.rare ? 'r' : f.type]++; if (t.rare) best = 2; else if (f.type === 'b' && best < 1) best = 1;
       f.dead = 1; f.respawn = t.rare ? rnd(5, 8) : f.type === 'b' ? rnd(3, 5) : rnd(1.8, 3.2); pop(f.x + i * 3, f.y - 8 - i * 9, '+' + t.pts, t.rare ? PAL.gold : PCOL[p.i]);
@@ -365,13 +358,10 @@
     if (t.rare && ((G.t * 6 + f.wob) % 2) < 1) { var sx = Math.round(f.x + Math.sin(G.t * 5 + f.wob) * 8), sy = Math.round(f.y - 6 + Math.cos(G.t * 4) * 3); R(sx, sy - 1, 1, 3, PAL.white); R(sx - 1, sy, 3, 1, PAL.white); }
   }
   function drawNet(p) {
-    var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = !p.dn;
+    var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = !p.dn, st = NetSprite.stageOf(p.dur, p.broken > 0);
     if (p.broken > 0) {
-      var ox = x, oy = y; // torn frame: dashed ring + shreds
-      ctx.fillStyle = PAL.stone2;
-      for (var a = 0; a < 24; a++) { if (a % 5 === 2 || a % 5 === 3) continue; var an = a / 24 * 6.283; ctx.fillRect(Math.round(ox + Math.cos(an) * NET_R), Math.round(oy + Math.sin(an) * NET_R), 1, 1); }
-      R(ox - 3, oy - 2, 2, 1, PAL.cream); R(ox + 2, oy + 3, 3, 1, PAL.cream); R(ox + 5, oy - 5, 1, 2, PAL.cream);
-      if (((G.t * 4) | 0) & 1) T(Math.ceil(p.broken) + 's', x, y + 14, PAL.red, { al: 'c', sh: PAL.ink });
+      if (p.broken < 1 && ((G.t * 8) | 0) & 1) { T(PNAME[p.i], x, y - NET_R - 14, col, { al: 'c', sh: PAL.ink }); return; } // blinks just before the new net arrives
+      ctx.drawImage(NetSprite.get(5, col, false), x - NetSprite.C, y - NetSprite.C);
       T(PNAME[p.i], x, y - NET_R - 14, col, { al: 'c', sh: PAL.ink });
       return;
     }
@@ -382,16 +372,7 @@
       circleDither(x, y, NET_R, PAL.hi, 0);
       var rr = Math.floor((G.t * 10) % 3); circleOutline(x, y, NET_R + 2 + rr, PAL.hi);
     }
-    var wear = 1 - p.dur / 100;
-    if (up) circleDither(x, y, NET_R - 1, wear > .6 ? PAL.cream : PAL.white, 1);
-    circleOutline(x, y, NET_R, col); circleOutline(x, y, NET_R - 1, col);
-    if (up) { for (var h = 1; h <= 3; h++) R(x - NET_R + 3 + h, y - NET_R + 7 - h * 2 + 1, 1, 1, PAL.white); }
-    // handle
-    for (var k = 0; k < 9; k++) R(x + NET_R - 3 + k, y + NET_R - 3 + k, 2, 2, k < 3 ? col : PAL.wood);
-    // cracks grow with wear
-    var cr = Math.floor(wear * 8); ctx.fillStyle = up ? PAL.stone2 : PAL.deep;
-    var cp = [[-4, -3], [-3, -2], [-2, -1], [4, 3], [3, 2], [2, 6], [-6, 4], [-5, 5], [5, -5], [6, -4]];
-    for (var c = 0; c < cr && c < cp.length; c++) ctx.fillRect(x + cp[c][0], y + cp[c][1], 1, 1);
+    ctx.drawImage(NetSprite.get(st, col, !up), x - NetSprite.C, y - NetSprite.C);
     T(PNAME[p.i], x, y - NET_R - 14, col, { al: 'c', sh: PAL.ink });
     if (!on) T('離線', x, y + NET_R + 3, PAL.red, { al: 'c', sh: PAL.ink });
   }
@@ -404,11 +385,6 @@
       R(dotx, 5, 4, 4, p.cid ? (on ? PAL.lime : PAL.red) : PAL.stone2);
       T(p.cid ? (on ? '' : '離線') : '', left ? dotx + 7 : dotx - 3, 0, PAL.red, { al: al });
       T(String(p.score), left ? x0 + 46 : x0 - 46, 0, PAL.white, { al: left ? 'l' : 'r', sc: 1, sh: PAL.dred });
-      // durability bar
-      var bw = 70, bx = left ? x0 : x0 - bw, pc = Math.max(0, p.dur) / 100;
-      R(bx, 15, bw, 6, PAL.stone); R(bx + 1, 16, bw - 2, 4, PAL.ink);
-      var bc = pc > .5 ? PAL.lime : pc > .25 ? PAL.gold : PAL.red; R(bx + 1, 16, Math.round((bw - 2) * pc), 4, bc);
-      if (p.broken > 0) T('網破了', left ? bx + bw + 3 : bx - 3, 11, PAL.red, { al: left ? 'l' : 'r' });
     });
     var tl = Math.ceil(G.phase === 'lobby' || G.phase === 'countdown' ? DURATION : G.tLeft), m = Math.floor(tl / 60), s = tl % 60;
     T(m + ':' + (s < 10 ? '0' : '') + s, W / 2, 0, G.phase === 'play' && G.tLeft <= 10 ? (((G.t * 3) | 0) & 1 ? PAL.red : PAL.white) : PAL.gold, { al: 'c', sc: 1.5 | 0 || 1 });
@@ -491,5 +467,5 @@
   }
   var fontsReady = (document.fonts && document.fonts.load) ? Promise.all([document.fonts.load('12px Fusion', '撈金魚abc123')]).catch(function () {}) : Promise.resolve();
   fontsReady.then(function () { tcache = {}; requestAnimationFrame(render); });
-  window.__gf = { G: G, hub: hub, room: room, joinURL: joinURL, TYPES: TYPES, NET_R: NET_R, GAIN: GAIN, startCountdown: startCountdown };
+  window.__gf = {NetSprite: NetSprite,  G: G, hub: hub, room: room, joinURL: joinURL, TYPES: TYPES, NET_R: NET_R, GAIN: GAIN, startCountdown: startCountdown };
 })();

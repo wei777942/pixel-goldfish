@@ -122,21 +122,24 @@ async def main():
                 cl = lambda v: max(0, min(22, v))
                 gx = math.copysign(cl(abs(ex) * .45 + 5), ex) if abs(ex) > 4 else 0; by = math.copysign(cl(abs(ey) * .45 + 5), ey) if abs(ey) > 4 else 0
                 # --- scripted checks
-                if pi == 0 and not violent['done'] and st['t'] < 40 and st['cool'] <= 0:
-                    violent['done'] = True; await tilt_to(pg, 0, 22, 0); await asyncio.sleep(.8)
-                    log('P1 SNAP BACK (instant return from 22deg)'); await tilt_to(pg, 0, 0, 0)
-                    for _ in range(30):
-                        s2 = await host.evaluate("window.__gf.G.players[0].broken")
-                        pp = await pg.evaluate("[...document.querySelectorAll('#pops .pop')].map(e=>e.textContent).join('|')")
-                        if pp and not violent['pop']: violent['pop'] = pp
-                        if s2 > 0: violent['broke'] = True
-                        await asyncio.sleep(.1)
-                    violent['str'] = await host.evaluate("window.__gf.G.players[0].lastStr")
-                    await pg.screenshot(path=SH + f'{TAG}_phone1_netbroken.png'); await host.screenshot(path=SH + f'{TAG}_host_netbroken.png'); continue
-                if pi == 1 and not hard['n'] and st['t'] < 50 and st['cool'] <= 0:
-                    hard['n'] = 1; await tilt_to(pg, 1, 22, 0); await asyncio.sleep(.8); await ramp_return(pg, 1, 22, 0, steps=3, gap=.05)   # fast but not a snap
-                    await asyncio.sleep(1.2); hard['fast_return_broke'] = (await host.evaluate("window.__gf.G.players[1].broken")) > 0
-                    hard['fast_return_str'] = await host.evaluate("window.__gf.G.players[1].lastStr"); log('fast (150ms) return broke net?', hard); continue
+                if pi == 0 and not violent['done'] and st['t'] < 45 and st['cool'] <= 0:
+                    # stay in the water (sweep side to side, fast) until the paper wears out; record the wear stages seen
+                    violent['done'] = True; t0 = time.time(); stages = []; d0 = st['dur']; log('P1 STAYS IN WATER until it breaks')
+                    k = 0
+                    while time.time() - t0 < 40:
+                        await tilt_to(pg, 0, 22 if k % 2 == 0 else -22, 0); k += 1; await asyncio.sleep(.45)
+                        q = await host.evaluate("({d:window.__gf.G.players[0].dur,b:window.__gf.G.players[0].broken,dn:window.__gf.G.players[0].dn})")
+                        stg = await host.evaluate("(d)=>window.__gf.NetSprite.stageOf(d,false)", q['d'])
+                        if not stages or stages[-1] != stg: stages.append(stg); await host.screenshot(path=SH + f'{TAG}_host_stage{stg}.png')
+                        if q['b'] > 0: violent['broke'] = True; break
+                    violent['secs_in_water'] = round(time.time() - t0, 1); violent['stages_seen'] = stages
+                    await pg.screenshot(path=SH + f'{TAG}_phone1_netbroken.png'); await host.screenshot(path=SH + f'{TAG}_host_netbroken.png')
+                    await tilt_to(pg, 0, 0, 0); await asyncio.sleep(.5); continue
+                if pi == 1 and not hard['n'] and st['t'] < 55 and st['cool'] <= 0 and st['dur'] > 99:
+                    hard['n'] = 1; await tilt_to(pg, 1, 0, 0); await asyncio.sleep(.3); d1 = await host.evaluate("window.__gf.G.players[1].dur")
+                    await asyncio.sleep(3.5); d2 = await host.evaluate("window.__gf.G.players[1].dur")
+                    await tilt_to(pg, 1, 22, 0); await asyncio.sleep(.8); await tilt_to(pg, 1, 0, 0); await asyncio.sleep(.7)
+                    hard['dur_out_of_water_before_after'] = [d1, d2]; hard['no_wear_out_of_water'] = d1 == d2; log('out-of-water wear check', hard); continue
                 # --- normal play: tilt toward fish (net dips + moves), then ease back to centre = scoop
                 if d > 12:
                     await tilt_to(pg, pi, gx, by); await asyncio.sleep(.12)

@@ -1,6 +1,6 @@
 /* 撈金魚 phone controller (motion sensing). Sends input only; renders what the big screen says.
  *  - tilt away from neutral (deviceorientation) -> net goes DOWN into the water and moves (rate control, sent as cumulative counters)
- *  - return to neutral (inside the deadzone, held ~200ms) -> ONE 'sc' scoop event with the snap-back speed; host decides catch / tear */
+ *  - return to neutral (inside the deadzone, held ~200ms) -> ONE 'sc' scoop event with the snap-back speed; host decides the catch (no wear out of water) */
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
@@ -20,7 +20,7 @@
   var S = { slot: -1, st: null, lastSt: 0, joined: false, full: false, relayOn: false, seq: 0, cx: 0, cy: 0, rc: 0, sn: 0, ss: 0,
     seenEv: {}, lastSent: 0, dirty: false, mode: 'start' /* start|bad|run */, touchMode: false, tries: 0,
     u: null, u0: null, calUntil: 0, calAcc: null, vx: 0, vy: 0, lastOri: 0, tx: 0, ty: 0, lastTick: 0,
-    down: false, downAt: 0, inDead: 0, hist: [], tear: 4, warn: false, orient: 0, sendN: 0, scN: 0, lastSnap: 0 };
+    down: false, downAt: 0, inDead: 0, hist: [], orient: 0, sendN: 0, scN: 0, lastSnap: 0 };
 
   /* ================= relay ================= */
   var hub = new GFRelay.Hub({
@@ -28,7 +28,7 @@
     onmsg: function (m) {
       if (m.k === 'full' && m.c === cid) { S.full = true; render(); return; }
       if (m.k !== 'st') return;
-      S.st = m; S.lastSt = Date.now(); if (m.tr) S.tear = m.tr;
+      S.st = m; S.lastSt = Date.now();
       var i = -1; for (var j = 0; j < m.pl.length; j++) if (m.pl[j].c === cid) i = j;
       if (i >= 0) { if (!S.joined || S.slot !== i) { S.joined = true; S.slot = i; S.full = false; $('app').style.setProperty('--pc', PCOL[i]); } }
       if (m.ph !== S.lastPhase) { if (m.ph === 'countdown' && S.mode === 'run') calibrate(); S.lastPhase = m.ph; }
@@ -55,7 +55,7 @@
     hub.send({ k: 'in', c: cid, s: q, x: Math.round(S.cx * 10) / 10, y: Math.round(S.cy * 10) / 10, d: 0, rc: S.rc, sn: S.sn, ss: S.ss, mo: 1, ts: ts });
     var m = { k: 'sc', c: cid, n: S.sn, str: S.ss, q: q, ts: ts };
     hub.send(m); setTimeout(function () { hub.send(m); }, 90); setTimeout(function () { hub.send(m); }, 300);
-    if (navigator.vibrate) navigator.vibrate(snap >= S.tear ? [80, 40, 80] : 25);
+    if (navigator.vibrate) navigator.vibrate(25);
     var d = $('dot'); d.classList.remove('lift'); void d.offsetWidth; d.classList.add('lift'); setTimeout(function () { d.classList.remove('lift'); }, 600);
   }
 
@@ -91,6 +91,10 @@
       var r = (h[i].m - h[j].m) / (dt / 1000); if (r > best) best = r;
     }
     return best;
+  }
+  function drawNetIcon() {
+    var st = S.wear || 0, key = st + '|' + S.slot; if (S.iconKey === key) return; S.iconKey = key;
+    var cv = $('netcv'), g = cv.getContext('2d'); g.clearRect(0, 0, 40, 40); g.drawImage(NetSprite.get(st, PCOL[S.slot >= 0 ? S.slot : 0], false), 0, 0);
   }
   function setNetState(st) { // 'down' | 'up' | 'broken' : visual only
     ['dot', 'netico'].forEach(function (id) { var el = $(id); ['down', 'up', 'broken'].forEach(function (c) { el.classList.toggle(c, c === st); }); });
@@ -130,8 +134,6 @@
         if (held >= TUNE.minDip) sendScoop(snap); else sendIn(true);
       }
     } else S.inDead = 0;
-    // warning visual: snapping back close to the tear speed
-    var w = S.down && snapSpeed(now) > S.tear * 0.7; if (w !== S.warn) { S.warn = w; $('dot').classList.toggle('warn', w); }
     setNetState(brokenNow ? 'broken' : S.down ? 'down' : 'up');
     sendIn(false);
     var el = $('tilt'); var wd = el.clientWidth / 2 - 18, ht = el.clientHeight / 2 - 18;
@@ -252,8 +254,7 @@
     $('sc').textContent = me.sc;
     var ph = m.ph, tl = Math.ceil(m.t);
     $('tm').textContent = ph === 'play' ? (tl + 's') : ph === 'countdown' ? m.cd : ph === 'end' ? '0s' : '--';
-    $('barfill').style.width = me.du + '%'; $('barfill').style.background = me.du > 50 ? '#b6f23a' : me.du > 25 ? '#ffd23f' : '#e8423c';
-    $('nstxt').textContent = me.br > 0 ? '破了! ' + Math.ceil(me.br) + ' 秒後換新網' : me.du + '%';
+    S.wear = NetSprite.stageOf(me.du, me.br > 0); drawNetIcon();
     var playing = ph === 'play';
     var showReady = (ph === 'lobby' || ph === 'end') && hostOn && S.mode === 'run';
     $('ready').style.display = showReady ? 'block' : 'none'; $('hint').style.display = showReady ? 'none' : 'flex';
