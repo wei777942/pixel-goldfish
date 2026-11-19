@@ -7,7 +7,8 @@
   var Q = new URLSearchParams(location.search);
   var DURATION = Math.max(5, +Q.get('dur') || 60);
   var PX0 = 8, PY0 = 26, PX1 = 312, PY1 = 172;          // pond rect
-  var NET_R = 12, GAIN = +Q.get('gain') || 0.5;
+  var NET_R = 13, GAIN = +Q.get('gain') || 0.5;
+  var SCOOP_MIN = 7, SCOOP_BREAK = +Q.get('brk') || 26; // flick strength (m/s^2) window: below min = no scoop, above break = net tears
   var PAL = {
     ink: '#14102a', deep: '#0b2a5b', water: '#1456a0', water2: '#1b6ab8', light: '#2d86d6', hi: '#7cc8ff',
     stone: '#3c4166', stone2: '#6b7399', stone3: '#9aa3c7', lily: '#2e9e4f', lily2: '#5fd36b',
@@ -149,8 +150,8 @@
   var joinURL = base + 'play.html?r=' + room;
 
   function newPlayer(i) {
-    return { i: i, cid: null, lastSeen: 0, lastSeq: -1, cx: null, cy: null, lastRc: 0, ready: false, wantDown: false,
-      x: i ? 240 : 80, y: 110, down: false, downT: 0, dur: 100, broken: 0, needRelease: false, score: 0, caught: { s: 0, b: 0, r: 0 }, speed: 0, lastLift: 0 };
+    return { i: i, cid: null, lastSeen: 0, lastSeq: -1, cx: null, cy: null, lastRc: 0, ready: false, motion: false, lastSn: 0, lastStr: 0,
+      x: i ? 240 : 80, y: 110, tx: i ? 240 : 80, ty: 110, lift: 0, cool: 0, dur: 100, broken: 0, score: 0, caught: { s: 0, b: 0, r: 0 }, speed: 0 };
   }
   var G = { phase: 'lobby', players: [newPlayer(0), newPlayer(1)], fish: [], fx: [], pops: [], ev: [], evId: 1, tLeft: DURATION, cd: 0, cdT: 0, winner: null, t: 0, relay: { open: 0, total: 4 }, hostRx: 0, round: 0 };
   function connected(p) { return p.cid && (Date.now() - p.lastSeen) < 3500; }
@@ -171,11 +172,11 @@
   function startCountdown() {
     unlock();
     G.round++;
-    G.players.forEach(function (p, i) { var keep = p.cid, ls = p.lastSeen, sq = p.lastSeq, cx = p.cx, cy = p.cy, rc = p.lastRc; var n = newPlayer(i); n.cid = keep; n.lastSeen = ls; n.lastSeq = sq; n.cx = cx; n.cy = cy; n.lastRc = rc; G.players[i] = n; });
+    G.players.forEach(function (p, i) { var n = newPlayer(i); ['cid', 'lastSeen', 'lastSeq', 'cx', 'cy', 'lastRc', 'motion', 'lastSn'].forEach(function (k) { n[k] = p[k]; }); G.players[i] = n; });
     resetFish(); G.fx = []; G.pops = []; G.winner = null; G.tLeft = DURATION; G.phase = 'countdown'; G.cd = 3; G.cdT = 0; SFX.beep();
   }
   function finish() {
-    G.phase = 'end'; G.players.forEach(function (p) { p.ready = false; p.down = false; });
+    G.phase = 'end'; G.players.forEach(function (p) { p.ready = false; p.lift = 0; });
     var a = G.players[0].score, b = G.players[1].score; G.winner = a === b ? -1 : (a > b ? 0 : 1);
     G.endT = 0; G.conf = []; for (var i = 0; i < 70; i++) G.conf.push({ x: rnd(0, W), y: rnd(-120, 0), v: rnd(30, 70), c: [PAL.gold, PAL.pink, PAL.lime, PAL.hi, PAL.white][i % 5], w: Math.random() * 6 });
     SFX.end(); setTimeout(function () { if (G.winner >= 0) SFX.win(); }, 650);
@@ -191,6 +192,7 @@
   function onPhoneMsg(m) {
     if (!m || typeof m.c !== 'string' || m.c.length > 24) return;
     var now = Date.now(), i = slotOf(m.c), p;
+    G.rx = G.rx || {}; G.rx[m.k + ':' + (i < 0 ? '?' : i)] = (G.rx[m.k + ':' + (i < 0 ? '?' : i)] || 0) + 1;
     if (m.k === 'hi') {
       if (i < 0) { for (var j = 0; j < 2; j++) if (!G.players[j].cid) { i = j; break; } }
       if (i < 0) { // stale slot reuse: take over a slot whose phone vanished for >20s outside play
@@ -199,34 +201,41 @@
       if (i < 0) { hub.send({ k: 'full', c: m.c }); return; }
       p = G.players[i];
       var wasConn = connected(p) && p.cid === m.c;
-      p.cid = m.c; p.lastSeen = now; p.lastSeq = -1; p.cx = null; p.cy = null; p.lastRc = m.rc | 0;
+      p.cid = m.c; p.lastSeen = now; p.lastSeq = -1; p.cx = null; p.cy = null; p.lastRc = m.rc | 0; p.lastSn = m.sn | 0; p.motion = !!m.mo;
       if (!wasConn) SFX.join();
       broadcast(); return;
     }
     if (i < 0) { hub.send({ k: 'full', c: m.c }); return; }
     p = G.players[i];
+    if (m.k === 'sc') { onScoopMsg(m); return; }
     if (m.k !== 'in') return;
     if (typeof m.s === 'number') { if (m.s <= p.lastSeq) return; p.lastSeq = m.s; }
     var wasDisc = !connected(p); p.lastSeen = now;
     if (typeof m.ts === 'number') { var lag = now - m.ts; if (lag > -5000 && lag < 20000) { G.lag = G.lag || { n: 0, sum: 0, max: 0, arr: [] }; G.lag.n++; G.lag.sum += lag; G.lag.max = Math.max(G.lag.max, lag); if (G.lag.arr.length < 5000) G.lag.arr.push(lag); } }
     if (wasDisc) { SFX.join(); }
-    // relative motion from cumulative counters (survives lost/duplicated packets)
+    // relative motion from cumulative counters (survives lost/duplicated packets); smoothed in step()
     if (typeof m.x === 'number' && typeof m.y === 'number') {
       if (p.cx === null) { p.cx = m.x; p.cy = m.y; }
       else {
         var dx = Math.max(-500, Math.min(500, m.x - p.cx)), dy = Math.max(-500, Math.min(500, m.y - p.cy)); p.cx = m.x; p.cy = m.y;
-        if (p.broken <= 0 || true) { p.x = Math.max(PX0 + 4, Math.min(PX1 - 4, p.x + dx * GAIN)); p.y = Math.max(PY0 + 4, Math.min(PY1 - 4, p.y + dy * GAIN)); p.speed = Math.min(160, p.speed * .5 + Math.hypot(dx, dy) * GAIN * 10 * .5); }
+        p.tx = Math.max(PX0 + 4, Math.min(PX1 - 4, p.tx + dx * GAIN)); p.ty = Math.max(PY0 + 4, Math.min(PY1 - 4, p.ty + dy * GAIN));
       }
     }
-    p.wantDown = !!m.d;
+    p.motion = !!m.mo;
+    if (typeof m.sn === 'number' && m.sn > p.lastSn) { p.lastSn = m.sn; doScoop(p, +m.ss || 0); }
     var rc = m.rc | 0;
-    if (rc > p.lastRc) { if (G.phase === 'lobby' || G.phase === 'end') { if (!p.ready) SFX.ready(); p.ready = true; } p.lastRc = rc; }
+    if (rc > p.lastRc) { if ((G.phase === 'lobby' || G.phase === 'end') && p.motion) { if (!p.ready) SFX.ready(); p.ready = true; } p.lastRc = rc; }
+  }
+  function onScoopMsg(m) {
+    var i = slotOf(m.c); if (i < 0) return; var p = G.players[i];
+    p.lastSeen = Date.now();
+    if (typeof m.n === 'number' && m.n > p.lastSn) { p.lastSn = m.n; doScoop(p, +m.str || 0); }
   }
 
   function snapshot() {
     return {
-      k: 'st', rm: room, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
-      pl: G.players.map(function (p) { return { c: p.cid, on: connected(p) ? 1 : 0, rd: p.ready ? 1 : 0, du: Math.max(0, Math.round(p.dur)), br: Math.ceil(p.broken * 10) / 10, dn: p.down ? 1 : 0, sc: p.score, cs: p.caught.s, cb: p.caught.b, cr: p.caught.r }; }),
+      k: 'st', rm: room, mn: SCOOP_MIN, bk: SCOOP_BREAK, ph: G.phase, t: Math.ceil(G.tLeft * 10) / 10, cd: G.cd, w: G.winner, rd: G.round,
+      pl: G.players.map(function (p) { return { c: p.cid, on: connected(p) ? 1 : 0, rd: p.ready ? 1 : 0, du: Math.max(0, Math.round(p.dur)), br: Math.ceil(p.broken * 10) / 10, lf: p.lift > 0 ? 1 : 0, mo: p.motion ? 1 : 0, sc: p.score, cs: p.caught.s, cb: p.caught.b, cr: p.caught.r }; }),
       ev: G.ev.map(function (e) { return { id: e.id, s: e.s, p: e.p, y: e.y }; })
     };
   }
@@ -248,7 +257,7 @@
       var sp = f.sp * (f.bump > 0 ? 2.2 : 1);
       // gently dodge dipped nets
       G.players.forEach(function (p) {
-        if (p.down && p.broken <= 0) { var dx = f.x - p.x, dy = f.y - p.y, d = Math.hypot(dx, dy); if (d < NET_R + 12 && d > .1) { var k = TYPES[f.type].rare ? 2.5 : .8; f.a += Math.atan2(Math.sin(Math.atan2(dy, dx) - f.a), Math.cos(Math.atan2(dy, dx) - f.a)) * Math.min(1, dt * k); if (TYPES[f.type].rare) f.bump = Math.max(f.bump, .2); } }
+        if (p.lift <= 0 && p.broken <= 0 && G.phase === 'play') { var dx = f.x - p.x, dy = f.y - p.y, d = Math.hypot(dx, dy); if (d < NET_R + 10 && d > .1) { var k = TYPES[f.type].rare ? 1.8 : .5; f.a += Math.atan2(Math.sin(Math.atan2(dy, dx) - f.a), Math.cos(Math.atan2(dy, dx) - f.a)) * Math.min(1, dt * k); if (TYPES[f.type].rare) f.bump = Math.max(f.bump, .2); } }
       });
       f.x += Math.cos(f.a) * sp * dt; f.y += Math.sin(f.a) * sp * dt * .8;
       var mx = PX0 + t.len * .6 + 2, Mx = PX1 - t.len * .6 - 2, my = PY0 + t.hh + 3, My = PY1 - t.hh - 3;
@@ -258,45 +267,45 @@
     });
   }
 
-  function breakNet(p, why) {
-    p.broken = 3; p.down = false; p.downT = 0; p.dur = 0; p.needRelease = true; SFX.brk(); splash(p.x, p.y, true);
-    pop(p.x, p.y - 20, '破了!', PAL.red); addEvent(p.i, 0, 'x');
+  function breakNet(p, violent) {
+    p.broken = 3.5; p.lift = 0; p.dur = 0; p.cool = 0; SFX.brk(); splash(p.x, p.y, true);
+    pop(p.x, p.y - 20, violent ? '太用力!' : '破了!', PAL.red); addEvent(p.i, 0, violent ? 'v' : 'x');
   }
   function updatePlayers(dt) {
+    var a = 1 - Math.exp(-dt * 14); // ease toward the (20-25 Hz) target positions
     G.players.forEach(function (p) {
-      var on = connected(p);
-      if (!on) p.wantDown = false;
-      p.speed *= Math.pow(.02, dt);
+      var ox = p.x, oy = p.y;
+      p.x += (p.tx - p.x) * a; p.y += (p.ty - p.y) * a;
+      p.speed = p.speed * .85 + (Math.hypot(p.x - ox, p.y - oy) / Math.max(dt, .001)) * .15;
+      if (p.lift > 0) p.lift -= dt; if (p.cool > 0) p.cool -= dt;
       if (p.broken > 0) {
-        p.broken -= dt; p.down = false;
+        p.broken -= dt;
         if (p.broken <= 0) { p.broken = 0; p.dur = 100; pop(p.x, p.y - 20, '新網!', PAL.cream); SFX.ready(); }
         return;
       }
-      if (p.needRelease && !p.wantDown) p.needRelease = false;
-      var want = G.phase === 'play' && p.wantDown && !p.needRelease;
-      if (want && !p.down) { p.down = true; p.downT = 0; splash(p.x, p.y); SFX.dip(); }
-      else if (!want && p.down) { lift(p); }
-      if (p.down) {
-        p.downT += dt;
-        var drain = 8 + Math.min(p.speed, 120) * 0.1;
-        G.fish.forEach(function (f) { if (!f.dead && f.type === 'b' && Math.hypot(f.x - p.x, f.y - p.y) < NET_R + 3) drain += 18; });
+      if (G.phase === 'play') { // paper net is always in the water: it slowly wears, faster when moving / big fish bump it
+        var drain = 3 + Math.min(p.speed, 120) * 0.05;
+        G.fish.forEach(function (f) { if (!f.dead && f.type === 'b' && Math.hypot(f.x - p.x, f.y - p.y) < NET_R + 3) drain += 14; });
         p.dur -= drain * dt;
-        if (p.dur <= 0) breakNet(p);
+        if (p.dur <= 0) breakNet(p, false);
       }
     });
   }
-  function lift(p) {
-    p.down = false; var held = p.downT; p.downT = 0; splash(p.x, p.y); SFX.lift();
-    if (held < 0.22) return;
+  function doScoop(p, str) {
+    p.lastStr = str;
+    if (G.phase !== 'play' || p.broken > 0 || p.cool > 0 || str < SCOOP_MIN) return;
+    p.cool = .6; p.lift = .5; splash(p.x, p.y); SFX.lift();
+    if (str >= SCOOP_BREAK) { breakNet(p, true); return; }   // too violent: paper tears
+    var s = (str - SCOOP_MIN) / (SCOOP_BREAK - SCOOP_MIN), rad = NET_R * (.9 + .35 * s), mul = .8 + .7 * s;
     var cand = [];
-    G.fish.forEach(function (f) { if (!f.dead) { var d = Math.hypot(f.x - p.x, f.y - p.y); if (d <= NET_R + TYPES[f.type].len * .15) cand.push([d, f]); } });
-    if (!cand.length) { SFX.miss(); return; }
+    G.fish.forEach(function (f) { if (!f.dead) { var d = Math.hypot(f.x - p.x, f.y - p.y); if (d <= rad + TYPES[f.type].len * .15) cand.push([d, f]); } });
+    if (!cand.length) { p.dur -= 2; SFX.miss(); return; }
     cand.sort(function (a, b) { return a[0] - b[0]; });
     cand = cand.slice(0, 3);
-    var cost = 0; cand.forEach(function (c) { cost += TYPES[c[1].type].cost; });
+    var cost = 2; cand.forEach(function (c) { cost += TYPES[c[1].type].cost * mul; });
     if (p.dur - cost <= 0) { // too heavy: paper tears, fish escape
       cand.forEach(function (c) { c[1].bump = 1.2; c[1].a = Math.atan2(c[1].y - p.y, c[1].x - p.x); });
-      breakNet(p); return;
+      breakNet(p, false); return;
     }
     p.dur -= cost; var best = 0, pts = 0;
     cand.forEach(function (c, i) {
@@ -325,7 +334,7 @@
     } else if (G.phase === 'play') {
       var before = Math.ceil(G.tLeft); G.tLeft -= dt;
       if (G.tLeft <= 10 && Math.ceil(G.tLeft) !== before && G.tLeft > 0) SFX.tick();
-      if (G.tLeft <= 0) { G.tLeft = 0; G.players.forEach(function (p) { if (p.down) { p.down = false; } }); finish(); broadcast(); }
+      if (G.tLeft <= 0) { G.tLeft = 0; finish(); broadcast(); }
     }
   }
   setInterval(step, 33);
@@ -350,7 +359,7 @@
     if (t.rare && ((G.t * 6 + f.wob) % 2) < 1) { var sx = Math.round(f.x + Math.sin(G.t * 5 + f.wob) * 8), sy = Math.round(f.y - 6 + Math.cos(G.t * 4) * 3); R(sx, sy - 1, 1, 3, PAL.white); R(sx - 1, sy, 3, 1, PAL.white); }
   }
   function drawNet(p) {
-    var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = !p.down;
+    var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = p.lift > 0;
     if (p.broken > 0) {
       var ox = x, oy = y; // torn frame: dashed ring + shreds
       ctx.fillStyle = PAL.stone2;
@@ -362,7 +371,7 @@
     }
     if (up) { // floating above water: shadow + raised net
       for (var yy = -NET_R; yy <= NET_R; yy += 2) { var w = Math.floor(Math.sqrt(NET_R * NET_R - yy * yy)); R(x - w + 3, y + yy + 5, w * 2, 1, PAL.deep); }
-      y -= 3;
+      y -= 5;
     } else {
       circleDither(x, y, NET_R, PAL.hi, 0);
       var rr = Math.floor((G.t * 10) % 3); circleOutline(x, y, NET_R + 2 + rr, PAL.hi);
@@ -429,9 +438,9 @@
       panel(px, y, 180, 28, PCOL[i]);
       T(PNAME[i], px + 6, y + 2, PCOL[i], {});
       R(px + 30, y + 7, 4, 4, p.cid ? (on ? PAL.lime : PAL.red) : PAL.stone2);
-      var st = !p.cid ? '等待加入…' : (!on ? '離線 (可重連)' : (p.ready ? 'READY!' : '已連線'));
+      var st = !p.cid ? '等待加入…' : (!on ? '離線 (可重連)' : (p.ready ? 'READY!' : (p.motion ? '感應就緒' : '已連線')));
       T(st, px + 38, y + 2, p.ready && on ? PAL.lime : (on ? PAL.cream : PAL.stone3), {});
-      T(!p.cid ? '' : (on && !p.ready ? '按 READY' : ''), px + 120, y + 2, PAL.gold, {});
+      T(!p.cid || !on || p.ready ? '' : (p.motion ? '按 READY' : '按「開始」'), px + 178, y + 2, PAL.gold, { al: 'r' });
     });
     T('雙方 READY 即開始 · Enter 強制'.replace('雙方 ', ''), px, 162, PAL.cream, {});
     T(base.replace(/^https?:\/\//, '').replace(/\/$/, '').slice(0, 40), px, 148, PAL.stone3, {});

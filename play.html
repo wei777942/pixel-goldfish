@@ -27,24 +27,47 @@ html,body{margin:0;height:100%;background:#14102a;color:#fff4d6;font-family:Fusi
 #bar{height:18px;background:#14102a;border:3px solid #3c4166;margin-top:4px}
 #barfill{height:100%;width:100%;background:#b6f23a;transition:width .15s}
 #netstate{font-size:13px;color:#9aa3c7;display:flex;justify-content:space-between}
-#pad{flex:1;position:relative;border:3px dashed #3c4166;background:repeating-linear-gradient(0deg,#0b0a1e 0 14px,#0f0d28 14px 28px);display:flex;align-items:center;justify-content:center;text-align:center;color:#6b7399;touch-action:none;min-height:80px}
-#pad.act{border-color:var(--pc)}
-#padhint{pointer-events:none;line-height:1.6}
+#tilt{flex:1;position:relative;border:3px dashed #3c4166;background:repeating-linear-gradient(0deg,#0b0a1e 0 14px,#0f0d28 14px 28px);min-height:90px;overflow:hidden}
+#tilt.act{border-color:var(--pc)}
+#ring{position:absolute;left:50%;top:50%;width:46%;aspect-ratio:1;max-width:150px;transform:translate(-50%,-50%);border:3px solid #3c4166;border-radius:50%}
+#dz{position:absolute;left:50%;top:50%;width:14%;aspect-ratio:1;transform:translate(-50%,-50%);border:2px solid #3c4166;border-radius:50%}
+#dot{position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;background:var(--pc);border:3px solid #14102a;box-shadow:0 0 0 2px var(--pc)}
+#padhint{position:absolute;left:0;right:0;bottom:6px;text-align:center;color:#6b7399;font-size:13px;pointer-events:none}
 #pops{position:absolute;inset:0;pointer-events:none;overflow:hidden}
-.pop{position:absolute;left:50%;top:40%;font-size:44px;color:#ffd23f;text-shadow:3px 3px 0 #14102a;animation:up 1.1s ease-out forwards}
+.pop{position:absolute;left:50%;top:40%;font-size:44px;color:#ffd23f;text-shadow:3px 3px 0 #14102a;animation:up 1.1s ease-out forwards;white-space:nowrap}
 .pop.x{color:#e8423c}
 @keyframes up{from{transform:translate(-50%,0);opacity:1}to{transform:translate(-50%,-90px);opacity:0}}
-#btn{height:26vh;min-height:110px;max-height:210px;border:4px solid #14102a;background:var(--pc);color:#14102a;font-family:inherit;font-size:26px;line-height:1.3;box-shadow:0 8px 0 #8b1d2c;touch-action:none;padding:0}
-#btn.down{transform:translateY(6px);box-shadow:0 2px 0 #8b1d2c;filter:brightness(1.15)}
-#btn:disabled{background:#3c4166;box-shadow:0 8px 0 #1c1c38;color:#9aa3c7}
-#ready{display:none;height:26vh;min-height:110px;max-height:210px;border:4px solid #14102a;background:#ffd23f;color:#14102a;font-family:inherit;font-size:34px;box-shadow:0 8px 0 #ff9f1c;touch-action:manipulation}
+#flick{padding:6px 8px}
+#flick .row{display:flex;justify-content:space-between;font-size:13px;color:#9aa3c7}
+#fbar{position:relative;height:26px;margin-top:4px;background:#14102a;border:3px solid #3c4166;overflow:hidden}
+#fzone{position:absolute;top:0;bottom:0;background:#1d3a1f}
+#fbreak{position:absolute;top:0;bottom:0;right:0;background:#4a1620}
+#ffill{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--pc);opacity:.95;transition:width .08s}
+#actrow{display:flex;gap:8px;align-items:stretch}
+#recal{flex:0 0 auto;font-family:inherit;font-size:16px;padding:0 12px;background:#3c4166;color:#fff4d6;border:3px solid #14102a;box-shadow:0 4px 0 #1c1c38}
+#recal:active{transform:translateY(3px);box-shadow:0 1px 0 #1c1c38}
+#ready{display:none;flex:1;height:18vh;min-height:90px;max-height:170px;border:4px solid #14102a;background:#ffd23f;color:#14102a;font-family:inherit;font-size:34px;box-shadow:0 8px 0 #ff9f1c;touch-action:manipulation}
 #ready:active{transform:translateY(6px);box-shadow:0 2px 0 #ff9f1c}
 #ready:disabled{background:#b6f23a;box-shadow:0 8px 0 #4c8a00}
-#app.offline #pad,#app.offline #btn,#app.offline #dur,#app.offline #mid{opacity:.35}
+#hint{flex:1;display:flex;align-items:center;justify-content:center;text-align:center;font-size:22px;color:#ffd23f;min-height:90px;line-height:1.4}
+#dbg{display:none;gap:8px}
+#dbg button{flex:1;height:70px;font-family:inherit;font-size:20px}
+#app.offline #tilt,#app.offline #flick,#app.offline #dur,#app.offline #mid{opacity:.35}
 #msg{text-align:center;color:#9aa3c7;font-size:14px;min-height:20px}
 #over{position:fixed;left:0;right:0;top:0;height:70%;background:#14102a;display:none;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:20px;z-index:5}
 #over h1{font-size:48px;margin:0;color:#ffd23f;text-shadow:4px 4px 0 #8b1d2c;font-weight:normal}
 #over p{margin:0;font-size:20px}
+#scr{position:fixed;inset:0;background:#14102a;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:20;padding:18px 18px calc(18px + env(safe-area-inset-bottom));overflow:auto;text-align:center}
+#scr.show{display:flex}
+#scr h1{font-size:44px;margin:0;color:#ffd23f;text-shadow:4px 4px 0 #8b1d2c;font-weight:normal}
+#scr h2{font-size:26px;margin:0;color:#ff6b6b;font-weight:normal;line-height:1.3}
+#scr p{margin:0;font-size:17px;line-height:1.6;max-width:420px}
+#scr ol{margin:0;padding-left:1.4em;text-align:left;font-size:16px;line-height:1.7;max-width:420px}
+#scr .small{font-size:13px;color:#9aa3c7}
+#startbtn,#retrybtn{font-family:inherit;font-size:46px;width:100%;max-width:420px;padding:26px 10px;background:#ffd23f;color:#14102a;border:4px solid #14102a;box-shadow:0 10px 0 #ff9f1c;touch-action:manipulation}
+#startbtn:active,#retrybtn:active{transform:translateY(8px);box-shadow:0 2px 0 #ff9f1c}
+#retrybtn{font-size:30px;padding:16px 10px}
+#touchbtn{display:none;font-family:inherit;font-size:14px;background:none;color:#6b7399;border:1px dashed #3c4166;padding:6px 10px}
 #join{position:fixed;inset:0;background:#14102a;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;z-index:9;padding:20px}
 #join input{font-family:inherit;font-size:30px;width:100%;max-width:300px;text-align:center;text-transform:uppercase;padding:10px;background:#0b0a1e;color:#ffd23f;border:3px solid #3c4166}
 #join button{font-family:inherit;font-size:26px;padding:12px 24px;background:#ffd23f;border:4px solid #14102a;box-shadow:0 6px 0 #ff9f1c}
@@ -58,12 +81,29 @@ html,body{margin:0;height:100%;background:#14102a;color:#fff4d6;font-family:Fusi
     <div id="timer" class="box"><small>剩餘</small><span id="tm">--</span></div>
   </div>
   <div id="dur" class="box"><div id="netstate"><span>紙網耐久</span><span id="nstxt">100%</span></div><div id="bar"><div id="barfill"></div></div></div>
-  <div id="pad"><div id="padhint">在這裡滑動<br>移動紙網</div><div id="pops"></div></div>
-  <button id="btn" disabled>按住 = 下水<br>放開 = 撈!</button>
-  <button id="ready">READY</button>
+  <div id="tilt"><div id="ring"></div><div id="dz"></div><div id="dot"></div><div id="padhint">傾斜手機移動紙網</div><div id="pops"></div></div>
+  <div id="flick" class="box"><div class="row"><span>揮動力道（往上快速一甩）</span><span id="fval">--</span></div><div id="fbar"><div id="fzone"></div><div id="fbreak"></div><div id="ffill"></div></div></div>
+  <div id="actrow"><button id="recal">重新校正</button><button id="ready">READY</button><div id="hint">往上快速一甩 = 撈!</div></div>
+  <div id="dbg"><button id="dbgscoop">撈 (debug)</button></div>
   <div id="msg"></div>
 </div>
 <div id="over"><h1 id="overh"></h1><p id="overp"></p></div>
+<div id="scr">
+  <div id="scr-start" style="display:contents">
+    <h1>撈金魚</h1>
+    <p>用手機當紙網：<br>傾斜 = 移動紙網<br>往上快速一甩 = 撈起！<br>（甩太用力紙網會破掉）</p>
+    <button id="startbtn">開始</button>
+    <p class="small">按下後請選「允許」動作與方向存取，並把手機握成平常的姿勢拿穩。</p>
+    <button id="touchbtn">觸控除錯模式</button>
+  </div>
+  <div id="scr-bad" style="display:none">
+    <h2 id="badtitle">無法使用動作感應器</h2>
+    <p id="badwhy"></p>
+    <ol id="badsteps"></ol>
+    <button id="retrybtn">重試</button>
+    <p class="small" id="badnote"></p>
+  </div>
+</div>
 <div id="join"><div style="font-size:30px;color:#ffd23f">撈金魚</div><div>輸入大螢幕上的房間碼</div><input id="roomin" maxlength="10" autocomplete="off" autocapitalize="characters"><button id="gobtn">加入</button></div>
 <script src="vendor/noble-secp256k1.min.js"></script>
 <script src="relay.js"></script>

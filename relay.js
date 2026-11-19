@@ -12,7 +12,7 @@
 
   function Relay(hub, url) {
     this.hub = hub; this.url = url; this.ws = null; this.state = 'closed'; this.fail = 0;
-    this.timer = null; this.pendingSince = 0; this.rejects = 0; this.lastReject = '';
+    this.timer = null; this.pendingSince = 0; this.rejects = 0; this.lastReject = ''; this.recv = 0; this.notices = 0; this.lastNotice = ''; this.sentN = 0; this.acks = 0; this.unacked = []; this.lostAt = []; this.skipped = 0;
   }
   Relay.prototype.connect = function () {
     var self = this, hub = this.hub;
@@ -29,10 +29,11 @@
     };
     ws.onmessage = function (ev) {
       var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
-      if (m[0] === 'EVENT') hub._onEvent(m[2]);
+      if (m[0] === 'EVENT') { self.recv++; hub._onEvent(m[2]); }
+      else if (m[0] === 'NOTICE' || m[0] === 'CLOSED') { self.notices++; self.lastNotice = String(m[m.length - 1] || '').slice(0, 120); }
       else if (m[0] === 'OK') {
-        self.pendingSince = 0;
-        if (m[2] === false) { self.rejects++; self.lastReject = String(m[3] || ''); }
+        self.pendingSince = 0; self.acks++; self.unacked.shift();
+        if (m[2] === false) { self.rejects++; self.lastReject = String(m[3] || ''); if (/rate|slow|limit/i.test(self.lastReject)) { self.lostAt.push(now()); } }
       }
     };
     ws.onclose = ws.onerror = function () { if (self.ws === ws) { self.ws = null; self._lost(); } };
@@ -46,9 +47,18 @@
     var delay = Math.min(15000, 800 * Math.pow(1.7, Math.min(this.fail, 8))) * (0.7 + Math.random() * 0.6); // backoff + jitter
     this.timer = setTimeout(function () { self.connect(); }, delay);
   };
-  Relay.prototype.send = function (str) {
+  // A relay that silently drops/queues events (rate limiting) never acks them. Count unacked sends older than 2.5s as lost;
+  // while a relay has lost >=3 in the last 8s we stop sending it droppable (movement) packets so we don't hammer it.
+  Relay.prototype.congested = function () {
+    var t = now(), i;
+    while (this.unacked.length && t - this.unacked[0] > 2500) { this.lostAt.push(this.unacked.shift()); }
+    while (this.lostAt.length && t - this.lostAt[0] > 8000) this.lostAt.shift();
+    return this.lostAt.length >= 3;
+  };
+  Relay.prototype.send = function (str, droppable) {
     if (this.state !== 'open' || !this.ws) return false;
-    try { this.ws.send(str); if (!this.pendingSince) this.pendingSince = now(); return true; } catch (e) { return false; }
+    if (droppable && this.congested()) { this.skipped++; return false; }
+    try { this.ws.send(str); this.sentN++; this.unacked.push(now()); if (!this.pendingSince) this.pendingSince = now(); return true; } catch (e) { return false; }
   };
   Relay.prototype.drop = function () { // force a (test/health) reconnect
     this._lost();
@@ -101,10 +111,11 @@
       ev.sig = hex(sig);
       var msg = JSON.stringify(['EVENT', ev]);
       self.seen[ev.id] = 1; // never process our own echo
-      var n = 0; self.relays.forEach(function (r) { if (r.send(msg)) n++; });
+      var n = 0; self.relays.forEach(function (r) { if (r.send(msg, droppable)) n++; });
       if (n) self.sent++;
     }).catch(function (e) { console.error('send', e); }).then(function () { self.signing--; });
   };
+  Hub.prototype.stats = function () { return this.relays.map(function (r) { return { url: r.url, state: r.state, recv: r.recv, sent: r.sentN, acks: r.acks, lost: r.lostAt.length, skipped: r.skipped, rejects: r.rejects, lastReject: r.lastReject, notices: r.notices, lastNotice: r.lastNotice }; }); };
   Hub.prototype.dropAll = function () { this.relays.forEach(function (r) { r.drop(); }); };
   Hub.prototype.stop = function () { this.stopped = true; clearInterval(this.wd); this.relays.forEach(function (r) { clearTimeout(r.timer); if (r.ws) { try { r.ws.close(); } catch (e) {} } }); };
 
