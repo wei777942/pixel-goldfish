@@ -29,14 +29,16 @@ html,body{margin:0;height:100%;background:#14102a;color:#fff4d6;font-family:Fusi
 #netstate{font-size:13px;color:#9aa3c7;display:flex;justify-content:space-between}
 #tilt{flex:1;position:relative;border:3px dashed #3c4166;background:repeating-linear-gradient(0deg,#0b0a1e 0 14px,#0f0d28 14px 28px);min-height:90px;overflow:hidden}
 #tilt.act{border-color:var(--pc)}
-#ring{position:absolute;left:50%;top:50%;width:46%;aspect-ratio:1;max-width:150px;transform:translate(-50%,-50%);border:3px solid #3c4166;border-radius:50%}
-#dz{position:absolute;left:50%;top:50%;width:14%;aspect-ratio:1;transform:translate(-50%,-50%);border:2px solid #3c4166;border-radius:50%}
-#chv,#chh{position:absolute;background:#2a2f55}
+#rings{position:absolute;inset:0;width:100%;height:100%}
+#ringnum{position:absolute;left:8px;top:2px;font-size:64px;line-height:1.1;color:#9aa3c7;text-shadow:3px 3px 0 #14102a;pointer-events:none}
+#ringnum.out{color:#ffd23f}#ringnum.wet{color:#7cc8ff}#ringnum.broken{color:#e8423c}
+#tilt.wet{border-color:#7cc8ff}
+#chv,#chh{position:absolute;background:#2a2f55;display:none}
 #chv{left:50%;top:6%;bottom:6%;width:3px;margin-left:-1px}
 #chh{top:50%;left:6%;right:6%;height:3px;margin-top:-1px}
 #dot.broken{background:#e8423c;box-shadow:0 0 0 2px #e8423c;opacity:.7}
 @keyframes bob{0%,100%{transform:translateY(8px)}50%{transform:translateY(-10px)}}
-#dot{position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;background:var(--pc);border:3px solid #14102a;box-shadow:0 0 0 2px var(--pc)}
+#dot{z-index:2;position:absolute;left:50%;top:50%;width:22px;height:22px;margin:-11px 0 0 -11px;background:var(--pc);border:3px solid #14102a;box-shadow:0 0 0 2px var(--pc)}
 #padhint{position:absolute;left:0;right:0;bottom:6px;text-align:center;color:#6b7399;font-size:13px;pointer-events:none}
 #pops{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .pop{position:absolute;left:50%;top:40%;font-size:44px;color:#ffd23f;text-shadow:3px 3px 0 #14102a;animation:up 1.1s ease-out forwards;white-space:nowrap}
@@ -92,6 +94,27 @@ html,body{margin:0;height:100%;background:#14102a;color:#fff4d6;font-family:Fusi
 #howto .tiltico{background:repeating-linear-gradient(45deg,#fff4d6 0 6px,#0b0a1e 6px 12px)}
 #howto .dipico{background:#2d86d6;box-shadow:0 0 0 6px rgba(124,200,255,.5)}
 #howto .liftico{background:#fff4d6;box-shadow:0 12px 0 -3px rgba(0,0,0,.5);transform:translateY(-6px)}
+
+/* hidden tuning panel */
+#gear{position:absolute;right:6px;bottom:6px;width:34px;height:34px;opacity:.28;background:none;border:0;padding:0;z-index:3;touch-action:manipulation}
+#gear svg{width:100%;height:100%;fill:#9aa3c7;shape-rendering:crispEdges}
+#tune{position:fixed;left:0;right:0;bottom:0;max-height:78%;overflow:auto;background:rgba(11,10,30,.94);border-top:4px solid var(--pc);z-index:30;display:none;padding:10px 14px calc(12px + env(safe-area-inset-bottom));touch-action:pan-y}
+#tune.show{display:block}
+#tune .hd{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+#tune .hd b{flex:1;font-weight:normal;font-size:22px;color:#ffd23f}
+#tune .row{display:grid;grid-template-columns:1fr auto;gap:0 8px;margin:4px 0}
+#tune .row label{font-size:16px;color:#fff4d6}
+#tune .row output{font-size:18px;color:#b6f23a;min-width:84px;text-align:right}
+#tune .row.main0 label{color:#33b5ff}#tune .row.main1 label{color:#ffd23f}
+#tune .row input{grid-column:1/3;width:100%;height:26px;margin:0;accent-color:#ffd23f;touch-action:pan-y}
+#tune .live{margin:8px 0;padding:6px 8px;border:2px dashed #3c4166;font-size:15px;color:#9aa3c7;display:flex;justify-content:space-between;gap:8px}
+#tune .live span b{font-weight:normal;color:#ffd23f}
+#tune button{font-family:inherit;font-size:18px;padding:10px 12px;background:#3c4166;color:#fff4d6;border:3px solid #14102a;box-shadow:0 4px 0 #1c1c38;touch-action:manipulation}
+#tune .btns{display:flex;gap:8px;margin-top:10px}#tune .btns button{flex:1}
+#pst{width:26px;height:26px;border:3px solid #14102a;background:var(--pc);box-shadow:0 0 0 2px var(--pc)}
+#pst.down{background:#2d86d6;animation:ripple 1s linear infinite}#pst.up{box-shadow:0 0 0 2px var(--pc),0 8px 0 -2px rgba(0,0,0,.55)}
+#howto .dipico::after{top:-30px;border-top:18px solid #ffd23f}
+#howto .liftico::after{bottom:-42px;border-bottom:18px solid #ffd23f}
 </style>
 </head>
 <body>
@@ -101,11 +124,12 @@ html,body{margin:0;height:100%;background:#14102a;color:#fff4d6;font-family:Fusi
     <div id="score" class="box"><small>分數</small><b id="sc">0</b></div>
     <div id="timer" class="box"><small>剩餘</small><span id="tm">--</span></div>
   </div>
-  <div id="tilt"><div id="chv"></div><div id="chh"></div><div id="ring"></div><div id="dot"></div><div id="pops"></div></div>
+  <div id="tilt"><div id="chv"></div><div id="chh"></div><canvas id="rings"></canvas><div id="ringnum">0.0</div><div id="dot"></div><div id="pops"></div><button id="gear" aria-label="tune"><svg viewBox="0 0 16 16"><path d="M6 0h4v2h2v2h2v4h-2v2h-2v2H6v-2H4V8H2V4h2V2h2zM7 5v4h2V5z" fill-rule="evenodd" transform="translate(0 2)"/></svg></button></div>
   <div id="actrow"><button id="recal">重新校正</button><button id="ready">READY</button><div id="hint"><div id="netico"><canvas id="netcv" width="40" height="40"></canvas></div></div></div>
   <div id="dbg"><button id="dbgscoop">撈 (debug)</button></div>
   <div id="msg"></div>
 </div>
+<div id="tune"></div>
 <div id="over"><h1 id="overh"></h1><p id="overp"></p></div>
 <div id="scr">
   <div id="scr-start" style="display:contents">

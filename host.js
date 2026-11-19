@@ -288,7 +288,7 @@
   function doScoop(p, str, q) {
     p.lastStr = str; if (typeof q === 'number') p.ign = Math.max(p.ign, q);
     var held = p.downT; p.dn = false; p.downT = 0;
-    if (G.phase !== 'play' || p.broken > 0 || p.cool > 0 || held < 0.3) return;
+    if (G.phase !== 'play' || p.broken > 0 || p.cool > 0 || held < 0.2) return;
     p.cool = .6; p.lift = .5; splash(p.x, p.y); SFX.lift();
     var rad = NET_R * 1.2, mul = 1;
     var cand = [];

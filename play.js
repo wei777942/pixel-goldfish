@@ -1,6 +1,8 @@
 /* 撈金魚 phone controller (motion sensing). Sends input only; renders what the big screen says.
- *  - tilt away from neutral (deviceorientation) -> net goes DOWN into the water and moves (rate control, sent as cumulative counters)
- *  - return to neutral (inside the deadzone, held ~200ms) -> ONE 'sc' scoop event with the snap-back speed; host decides the catch (no wear out of water) */
+ *  - tilt (deviceorientation) always moves the net (rate control, sent as cumulative counters)
+ *  - tilt INSIDE the big centre circle = net above the water; tilt beyond the circle edge = net goes into the water (keeps moving, slower)
+ *  - tilting back inside the circle = ONE 'sc' scoop event; host decides the catch (no wear out of water)
+ *  - hysteresis band around the edge: in at R+H, out at R-H, so jitter at the edge does not flicker */
 (function () {
   'use strict';
   var $ = function (id) { return document.getElementById(id); };
@@ -15,12 +17,19 @@
   var cid; try { cid = localStorage.getItem('gf-cid-' + room); } catch (e) {}
   if (!cid) { cid = 'p' + Math.random().toString(36).slice(2, 10); try { localStorage.setItem('gf-cid-' + room, cid); } catch (e) {} }
 
-  // dead: tilt (|delta gravity|, ~sin angle) that puts the net in the water; exit: inside this for exitHold ms = scoop
-  var TUNE = { dead: 0.07, exit: 0.06, exitHold: 200, minDip: 350, range: 0.42, vmax: 230, rateMs: 50, keepMs: 450 };
+  var TUNE = { vmax: 200, rateMs: 50, keepMs: 450, minDip: 300 };
+  // user-tunable (hidden panel, saved in localStorage). The tilt indicator has numbered rings 1..10, DPR degrees per ring.
+  // dip: ring number beyond which the net goes into the water; ret: ring number you must come back inside for the scoop;
+  // sens: net speed gain; dead: deadzone ring (no net movement inside it); wspeed: in-water move speed relative to above water
+  var DPR = 3;
+  var DEF = { dip: 4.0, ret: 3.0, sens: 1, dead: 1.0, wspeed: 0.6 };
+  var USER = (function () { var u = {}, s = null; try { s = JSON.parse(localStorage.getItem('gf-tune-v5c') || 'null'); } catch (e) {} for (var k in DEF) u[k] = s && typeof s[k] === 'number' ? s[k] : DEF[k]; return u; })();
+  function saveUser() { try { localStorage.setItem('gf-tune-v5c', JSON.stringify(USER)); } catch (e) {} }
+  function ringOf(mag) { return Math.asin(Math.min(1, mag)) * 57.29578 / DPR; }   // tilt magnitude (~sin angle) -> ring number (decimal)
   var S = { slot: -1, st: null, lastSt: 0, joined: false, full: false, relayOn: false, seq: 0, cx: 0, cy: 0, rc: 0, sn: 0, ss: 0,
     seenEv: {}, lastSent: 0, dirty: false, mode: 'start' /* start|bad|run */, touchMode: false, tries: 0,
     u: null, u0: null, calUntil: 0, calAcc: null, vx: 0, vy: 0, lastOri: 0, tx: 0, ty: 0, lastTick: 0,
-    down: false, downAt: 0, inDead: 0, hist: [], orient: 0, sendN: 0, scN: 0, lastSnap: 0 };
+    down: false, downAt: 0, orient: 0, sendN: 0, scN: 0, lastSnap: 0, armed: false, dipN: 0, liftN: 0, cancelN: 0, mag: 0 };
 
   /* ================= relay ================= */
   var hub = new GFRelay.Hub({
@@ -30,7 +39,7 @@
       if (m.k !== 'st') return;
       S.st = m; S.lastSt = Date.now();
       var i = -1; for (var j = 0; j < m.pl.length; j++) if (m.pl[j].c === cid) i = j;
-      if (i >= 0) { if (!S.joined || S.slot !== i) { S.joined = true; S.slot = i; S.full = false; $('app').style.setProperty('--pc', PCOL[i]); } }
+      if (i >= 0) { if (!S.joined || S.slot !== i) { S.joined = true; S.slot = i; S.full = false; $('app').style.setProperty('--pc', PCOL[i]); document.documentElement.style.setProperty('--pc', PCOL[i]); } }
       if (m.ph !== S.lastPhase) { if (m.ph === 'countdown' && S.mode === 'run') calibrate(); S.lastPhase = m.ph; }
       events(m); render();
     },
@@ -74,7 +83,7 @@
     if (S.calAcc) S.calAcc.push(u);
   }
   function calibrate() {
-    S.calUntil = Date.now() + 700; S.calAcc = []; S.vx = S.vy = 0; S.down = false; S.inDead = 0; S.hist = [];
+    S.calUntil = Date.now() + 700; S.calAcc = []; S.vx = S.vy = 0; S.down = false; S.armed = false;
     $('msg').textContent = '校正中…';
     setTimeout(function () {
       if (S.calAcc && S.calAcc.length) { var m = [0, 0, 0]; S.calAcc.forEach(function (u) { m[0] += u[0]; m[1] += u[1]; m[2] += u[2]; }); S.u0 = norm(m); }
@@ -83,15 +92,6 @@
     }, 720);
   }
 
-  // snap-back speed: fastest drop of the tilt magnitude over ~100ms in the last 700ms (rad/s)
-  function snapSpeed(now) {
-    var h = S.hist, best = 0;
-    for (var i = 0; i < h.length; i++) for (var j = i + 1; j < h.length; j++) {
-      var dt = h[j].t - h[i].t; if (dt < 80) continue; if (dt > 160) break;
-      var r = (h[i].m - h[j].m) / (dt / 1000); if (r > best) best = r;
-    }
-    return best;
-  }
   function drawNetIcon() {
     var st = S.wear || 0, key = st + '|' + S.slot; if (S.iconKey === key) return; S.iconKey = key;
     var cv = $('netcv'), g = cv.getContext('2d'); g.clearRect(0, 0, 40, 40); g.drawImage(NetSprite.get(st, PCOL[S.slot >= 0 ? S.slot : 0], false), 0, 0);
@@ -99,7 +99,32 @@
   function setNetState(st) { // 'down' | 'up' | 'broken' : visual only
     ['dot', 'netico'].forEach(function (id) { var el = $(id); ['down', 'up', 'broken'].forEach(function (c) { el.classList.toggle(c, c === st); }); });
   }
-  // 50 Hz: tilt -> velocity (deadzone + curve + smoothing) -> integrated position; send at <=20 Hz
+  /* numbered concentric rings 1..10 (DPR degrees each), dip ring + return ring marked, live dot and big live ring number */
+  var rcv = $('rings'), rg = rcv.getContext('2d'), lastDraw = 0;
+  function drawRings(now, ring, tx, ty, dipR, retR, deadR, broken) {
+    if (now - lastDraw < 30 && !S.forceDraw) return; lastDraw = now; S.forceDraw = false;
+    var el = $('tilt'), W = el.clientWidth, H = el.clientHeight, dpr = Math.min(2, window.devicePixelRatio || 1);
+    if (rcv.width !== Math.round(W * dpr) || rcv.height !== Math.round(H * dpr)) { rcv.width = Math.round(W * dpr); rcv.height = Math.round(H * dpr); }
+    rg.setTransform(dpr, 0, 0, dpr, 0, 0); rg.clearRect(0, 0, W, H);
+    var cx = W / 2, cy = H / 2, pr = (Math.min(W, H) / 2 - 10) / 10.4, wet = S.down && !broken;
+    function circ(r, col, lw, dash) { rg.beginPath(); rg.arc(cx, cy, r, 0, 6.2832); rg.strokeStyle = col; rg.lineWidth = lw; rg.setLineDash(dash || []); rg.stroke(); rg.setLineDash([]); }
+    if (wet) { rg.beginPath(); rg.arc(cx, cy, dipR * pr, 0, 6.2832); rg.fillStyle = 'rgba(45,134,214,.42)'; rg.fill(); }
+    for (var i = 1; i <= 10; i++) circ(i * pr, i % 5 === 0 ? '#4a5088' : '#2a2f55', i % 5 === 0 ? 2 : 1);
+    circ(deadR * pr, '#4a5088', 1, [3, 3]);
+    circ(retR * pr, '#ffd23f', 3); circ(dipR * pr, wet ? '#9fe0ff' : '#33b5ff', 4);
+    rg.font = '14px Fusion, monospace'; rg.textAlign = 'center'; rg.textBaseline = 'middle';
+    for (i = 1; i <= 10; i++) { var ly = cy - i * pr, lab = String(i); rg.fillStyle = '#14102a'; rg.fillRect(cx - 8, ly - 8, 16, 15); rg.fillStyle = (Math.abs(i - dipR) < 0.5 || Math.abs(i - retR) < 0.5) ? '#fff4d6' : '#7a82b5'; rg.fillText(lab, cx, ly); }
+    // tag the two marked rings on the right side
+    function tag(r, col, txt, sy) { var x = cx + r * pr * 0.7071, y = cy + sy * r * pr * 0.7071; rg.fillStyle = col; rg.fillRect(x - 2, y - 2, 5, 5); rg.fillStyle = col; rg.textAlign = 'left'; rg.font = '15px Fusion, monospace'; rg.fillText(txt, x + 6, y + (sy > 0 ? 8 : -8)); rg.textAlign = 'center'; }
+    tag(dipR, '#33b5ff', '入水 ' + dipR.toFixed(1), -1); tag(retR, '#ffd23f', '回收 ' + retR.toFixed(1), 1);
+    // tilt dot
+    var mg = Math.hypot(tx, ty) || 1, rr = Math.min(10.3, ring), dx = tx / mg * rr * pr, dy = ty / mg * rr * pr;
+    if (!Math.hypot(tx, ty)) { dx = dy = 0; }
+    var dt0 = $('dot'); dt0.style.setProperty('--tx', dx.toFixed(1) + 'px'); dt0.style.setProperty('--ty', dy.toFixed(1) + 'px'); dt0.style.transform = 'translate(' + dx.toFixed(1) + 'px,' + dy.toFixed(1) + 'px)';
+    var n = $('ringnum'); n.textContent = ring.toFixed(1); n.className = broken ? 'broken' : wet ? 'wet' : ring > dipR ? 'out' : '';
+    $('tilt').classList.toggle('wet', wet);
+  }
+  // 50 Hz: tilt -> velocity -> integrated position; circle logic decides above / in water; send at <=20 Hz
   function tick() {
     var now = Date.now(), dt = Math.min(0.1, (now - (S.lastTick || now)) / 1000); S.lastTick = now;
     if (S.mode !== 'run' || S.touchMode) { sendIn(false); return; }
@@ -113,32 +138,33 @@
       ty = (dyv * t1 + dz * t2) * ky;            // top edge down (away) -> negative -> net moves up the screen
     }
     S.tx = tx; S.ty = ty;
-    var mag = Math.hypot(tx, ty), tvx = 0, tvy = 0;
-    S.hist.push({ t: now, m: mag }); while (S.hist.length && now - S.hist[0].t > 800) S.hist.shift();
-    if (mag > TUNE.dead) {
-      var f = Math.min(1, (mag - TUNE.dead) / (TUNE.range - TUNE.dead)); f = Math.pow(f, 1.3);
-      tvx = tx / mag * f * TUNE.vmax; tvy = ty / mag * f * TUNE.vmax;
+    var mag = Math.hypot(tx, ty), tvx = 0, tvy = 0, ring = ringOf(mag); S.mag = mag; S.ring = ring;
+    var dipR = USER.dip, retR = Math.min(USER.ret, dipR - 0.1), deadR = Math.min(USER.dead, retR - 0.1, dipR - 0.2);
+    var calibrating = !!S.calAcc || now <= S.calUntil || !S.u0, brokenNow = S.st && S.slot >= 0 && S.st.pl[S.slot] && S.st.pl[S.slot].br > 0;
+    // ring state machine (hysteresis = the gap between the two rings): beyond the dip ring = dip, back inside the return ring = lift / scoop
+    if (calibrating || brokenNow) { S.down = false; S.armed = false; }
+    else if (!S.down) {
+      if (ring < retR) S.armed = true;
+      if (S.armed && ring > dipR) { S.down = true; S.downAt = now; S.dipN++; sendIn(true); if (navigator.vibrate) navigator.vibrate(8); }
+    } else if (ring < retR) {
+      var held = now - S.downAt; S.down = false;
+      if (held >= TUNE.minDip) { S.liftN++; sendScoop(0); } else { S.cancelN++; sendIn(true); }
+    }
+    // movement: above water the speed ramps up to max at the dip ring; in water a (slower) constant speed in the tilt direction
+    if (ring > deadR) {
+      var spd;
+      if (S.down) spd = TUNE.vmax * USER.sens * USER.wspeed;
+      else spd = TUNE.vmax * USER.sens * Math.pow(Math.min(1, (ring - deadR) / Math.max(0.3, dipR - deadR)), 1.3);
+      tvx = tx / mag * spd; tvy = ty / mag * spd;
     }
     var k = 1 - Math.exp(-dt * 12); S.vx += (tvx - S.vx) * k; S.vy += (tvy - S.vy) * k;
     if (Math.abs(S.vx) > 0.4 || Math.abs(S.vy) > 0.4) { S.cx += S.vx * dt; S.cy += S.vy * dt; S.dirty = true; }
-    // dip / lift state machine
-    var calibrating = !!S.calAcc || now <= S.calUntil || !S.u0, brokenNow = S.st && S.slot >= 0 && S.st.pl[S.slot] && S.st.pl[S.slot].br > 0;
-    if (calibrating) { S.down = false; S.inDead = 0; }
-    else if (!S.down) {
-      if (mag > TUNE.dead) { S.down = true; S.downAt = now; S.inDead = 0; sendIn(true); if (navigator.vibrate) navigator.vibrate(8); }
-    } else if (mag < TUNE.exit) {
-      if (!S.inDead) S.inDead = now;
-      else if (now - S.inDead >= TUNE.exitHold) {          // back at centre for ~200ms: LIFT
-        var held = S.inDead - S.downAt, snap = snapSpeed(S.inDead + 40);
-        S.down = false; S.inDead = 0; S.vx = S.vy = 0; S.lastSnap = snap;
-        if (held >= TUNE.minDip) sendScoop(snap); else sendIn(true);
-      }
-    } else S.inDead = 0;
+    // the big screen says the net is not in the water any more (broke / round over): drop our in-water state
+    var me = S.st && S.slot >= 0 ? S.st.pl[S.slot] : null;
+    if (S.down && me && !me.dn && now - S.downAt > 1200 && now - S.lastSt < 1000) { S.down = false; S.armed = false; }
     setNetState(brokenNow ? 'broken' : S.down ? 'down' : 'up');
     sendIn(false);
-    var el = $('tilt'); var wd = el.clientWidth / 2 - 18, ht = el.clientHeight / 2 - 18;
-    var px = Math.max(-1, Math.min(1, tx / TUNE.range)) * wd + 'px', py = Math.max(-1, Math.min(1, ty / TUNE.range)) * ht + 'px', dt0 = $('dot');
-    dt0.style.setProperty('--tx', px); dt0.style.setProperty('--ty', py); dt0.style.transform = 'translate(' + px + ',' + py + ')';
+    drawRings(now, ring, tx, ty, dipR, retR, deadR, brokenNow);
     if (now - S.lastOri > 3000 && S.lastOri) showBad('lost');
   }
   setInterval(tick, 20);
@@ -154,7 +180,7 @@
     S.mode = 'bad'; S.u = null; S.u0 = null; showScreen('bad');
     var ios = isIOS(), steps = [], why = '', title = '無法使用動作感應器', note = '';
     if (reason === 'denied') {
-      why = '你剛剛沒有允許「動作與方向」存取（或被系統拒絕）。撈金魚要靠手機的傾斜和揮動來玩，沒有這個權限就無法操作。';
+      why = '你剛剛沒有允許「動作與方向」存取（或被系統拒絕）。撈金魚要靠手機的傾斜來玩，沒有這個權限就無法操作。';
       if (ios) {
         steps = ['完全關閉 Safari：從螢幕底部往上滑停住開啟 App 切換畫面，把 Safari 往上滑掉。',
           '重新打開 Safari，再掃一次 QR code，按「開始」，在跳出的詢問選「允許」。',
@@ -211,7 +237,7 @@
     }, 80);
   }
   function finishStart() {
-    S.mode = 'run'; S.touchMode = false; S.u0 = null; S.cx = S.cx; showScreen('none'); calibrate();
+    S.mode = 'run'; S.touchMode = false; S.u0 = null;  showScreen('none'); calibrate();
     sendIn(true); hi(); render();
   }
   $('startbtn').addEventListener('click', onStartTap);
@@ -263,9 +289,9 @@
     if (S.calAcc) msg = '校正中…請握穩不要動';
     else if (ph === 'lobby') msg = me.rd ? '等待另一位玩家 READY…' : '握穩手機，準備好就按 READY';
     else if (ph === 'countdown') msg = '準備!（倒數時自動校正）';
-    else if (playing) msg = me.br > 0 ? '紙網破了…等新網' : '傾斜移動 · 往上快速一甩撈起';
+    else if (playing) msg = me.br > 0 ? '紙網破了…等新網' : '傾斜移動 · 超過入水環入水 · 回到回收環內撈起';
     $('msg').textContent = hostOn && S.calAcc ? '校正中…' : '';
-    $('tilt').classList.toggle('act', Math.hypot(S.tx || 0, S.ty || 0) > TUNE.dead);
+    $('tilt').classList.toggle('act', (S.ring || 0) > USER.dead);
     var over = $('over');
     if (ph === 'end') {
       var w = m.w, me2 = m.pl[S.slot], other = m.pl[1 - S.slot];
@@ -278,7 +304,32 @@
   }
   setInterval(render, 500);
   if (navigator.wakeLock) { var wl = function () { navigator.wakeLock.request('screen').catch(function () {}); }; wl(); document.addEventListener('visibilitychange', function () { if (!document.hidden) wl(); }); }
+    /* ================= hidden tuning panel (gear icon, bottom-right corner of the play area) ================= */
+  var SPECS = [['dip', '入水環', 1, 9.5, 0.1, ' 環', 1], ['ret', '回收環', 0.5, 9, 0.1, ' 環', 1], ['sens', '傾斜靈敏度', 0.4, 2.5, 0.05, '×', 2],
+    ['dead', '死區環', 0.2, 3, 0.1, ' 環', 1], ['wspeed', '水中移動速度', 0.2, 1.2, 0.05, '×', 2]];
+  (function buildPanel() {
+    var t = $('tune'), h = '<div class="hd"><div id="pst" class="up"></div><b id="tl-big">0.0</b><b style="flex:1;color:#9aa3c7;font-size:15px">每環 ' + DPR + '°</b><button id="tclose">關閉</button></div>';
+    SPECS.forEach(function (s, i) { h += '<div class="row' + (i < 2 ? ' main' + i : '') + '"><label for="tn-' + s[0] + '">' + s[1] + '</label><output id="to-' + s[0] + '"></output><input type="range" id="tn-' + s[0] + '" min="' + s[2] + '" max="' + s[3] + '" step="' + s[4] + '"></div>'; });
+    h += '<div class="live"><span>入水次數 <b id="tl-dips">0</b></span><span>撈起 <b id="tl-lifts">0</b></span></div>';
+    h += '<div class="btns"><button id="treset">恢復預設</button></div>';
+    t.innerHTML = h;
+    function fmt(s) { var v = USER[s[0]]; return v.toFixed(s[6]) + s[5] + (s[5] === ' 環' ? ' (' + (v * DPR).toFixed(0) + '°)' : ''); }
+    function show() { SPECS.forEach(function (s) { $('tn-' + s[0]).value = USER[s[0]]; $('to-' + s[0]).textContent = fmt(s); }); S.forceDraw = true; }
+    function clampRings(who) { // keep: return ring at least 0.1 inside the dip ring; deadzone inside the return ring
+      if (USER.ret > USER.dip - 0.1) { if (who === 'dip') USER.ret = Math.max(0.5, USER.dip - 0.1); else USER.dip = Math.min(9.5, USER.ret + 0.1); }
+      if (USER.dead > USER.ret - 0.1) USER.dead = Math.max(0.2, USER.ret - 0.1);
+    }
+    SPECS.forEach(function (s) { $('tn-' + s[0]).addEventListener('input', function () { USER[s[0]] = +this.value; clampRings(s[0]); saveUser(); show(); }); });
+    $('treset').addEventListener('click', function () { for (var k in DEF) USER[k] = DEF[k]; saveUser(); show(); });
+    $('gear').addEventListener('click', function () { show(); t.classList.add('show'); });
+    $('tclose').addEventListener('click', function () { t.classList.remove('show'); });
+    setInterval(function () {
+      if (!t.classList.contains('show')) return;
+      $('tl-big').textContent = (S.ring || 0).toFixed(1); $('tl-dips').textContent = S.dipN; $('tl-lifts').textContent = S.liftN;
+      $('pst').className = S.down ? 'down' : 'up';
+    }, 100);
+  })();
   showScreen('start');
-  window.__gfp = { S: S, hub: hub, cid: cid, TUNE: TUNE };
+  window.__gfp = { S: S, hub: hub, cid: cid, TUNE: TUNE, USER: USER, DEF: DEF };
   render();
 })();
