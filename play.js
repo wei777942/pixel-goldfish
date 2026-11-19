@@ -77,6 +77,7 @@
     $('pname').textContent = S.full ? '房間已滿' : S.slot >= 0 ? 'P' + (S.slot + 1) + (S.slot ? ' 綠' : ' 粉') : (S.relayOn ? '加入中…' : '連線中…');
     var c;
     if (!S.relayOn) c = ['off', '中繼離線 · 重連中…']; else if (!hostOn) c = ['warn', S.joined ? '大螢幕無回應 · 重連中…' : '尋找大螢幕…']; else c = ['on', '已連線 · 房間 ' + room];
+    document.getElementById('app').classList.toggle('offline', !S.relayOn || !hostOn);
     $('conn').innerHTML = '<span class="dot ' + c[0] + '"></span>' + c[1];
     if (!me || !hostOn) { btn.disabled = true; $('ready').style.display = 'none'; btn.style.display = ''; $('msg').textContent = S.full ? '這個房間已有兩位玩家' : ''; if (!me) return; }
     $('sc').textContent = me.sc;
@@ -85,7 +86,7 @@
     $('barfill').style.width = me.du + '%'; $('barfill').style.background = me.du > 50 ? '#b6f23a' : me.du > 25 ? '#ffd23f' : '#e8423c';
     $('nstxt').textContent = me.br > 0 ? '破了! ' + Math.ceil(me.br) + ' 秒後換新網' : (me.dn ? '水中…' : me.du + '%');
     var playing = ph === 'play';
-    btn.disabled = !(playing && hostOn) || me.br > 0;
+    btn.disabled = !(playing && hostOn && S.relayOn) || me.br > 0;
     var showReady = (ph === 'lobby' || ph === 'end') && hostOn;
     $('ready').style.display = showReady ? 'block' : 'none'; btn.style.display = showReady ? 'none' : '';
     $('ready').disabled = !!me.rd; $('ready').textContent = me.rd ? 'READY! 等待對手' : 'READY';
@@ -103,8 +104,7 @@
       $('overh').style.color = w === S.slot ? '#ffd23f' : w === -1 ? '#fff4d6' : '#9aa3c7';
       $('overp').innerHTML = '你 <b style="color:' + PCOL[S.slot] + '">' + me2.sc + '</b> 分 vs 對手 ' + other.sc + ' 分<br><small>小×' + me2.cs + ' 大×' + me2.cb + ' 稀有×' + me2.cr + '</small>';
       over.style.display = 'flex'; over.style.pointerEvents = 'none';
-      over.style.justifyContent = 'flex-start'; over.style.paddingTop = '18vh'; over.style.background = 'rgba(20,16,42,.9)';
-      over.style.height = '62vh'; over.style.bottom = 'auto';
+      var rb = $('ready').getBoundingClientRect(); over.style.height = Math.max(200, rb.top - 6) + 'px';
     } else over.style.display = 'none';
   }
   setInterval(render, 500);

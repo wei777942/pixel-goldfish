@@ -7,7 +7,7 @@
   var Q = new URLSearchParams(location.search);
   var DURATION = Math.max(5, +Q.get('dur') || 60);
   var PX0 = 8, PY0 = 26, PX1 = 312, PY1 = 172;          // pond rect
-  var NET_R = 11, GAIN = +Q.get('gain') || 0.5;
+  var NET_R = 12, GAIN = +Q.get('gain') || 0.5;
   var PAL = {
     ink: '#14102a', deep: '#0b2a5b', water: '#1456a0', water2: '#1b6ab8', light: '#2d86d6', hi: '#7cc8ff',
     stone: '#3c4166', stone2: '#6b7399', stone3: '#9aa3c7', lily: '#2e9e4f', lily2: '#5fd36b',
@@ -248,7 +248,7 @@
       var sp = f.sp * (f.bump > 0 ? 2.2 : 1);
       // gently dodge dipped nets
       G.players.forEach(function (p) {
-        if (p.down && p.broken <= 0) { var dx = f.x - p.x, dy = f.y - p.y, d = Math.hypot(dx, dy); if (d < NET_R + 12 && d > .1) { var k = TYPES[f.type].rare ? 4 : .9; f.a += Math.atan2(Math.sin(Math.atan2(dy, dx) - f.a), Math.cos(Math.atan2(dy, dx) - f.a)) * Math.min(1, dt * k); if (TYPES[f.type].rare) f.bump = Math.max(f.bump, .2); } }
+        if (p.down && p.broken <= 0) { var dx = f.x - p.x, dy = f.y - p.y, d = Math.hypot(dx, dy); if (d < NET_R + 12 && d > .1) { var k = TYPES[f.type].rare ? 2.5 : .8; f.a += Math.atan2(Math.sin(Math.atan2(dy, dx) - f.a), Math.cos(Math.atan2(dy, dx) - f.a)) * Math.min(1, dt * k); if (TYPES[f.type].rare) f.bump = Math.max(f.bump, .2); } }
       });
       f.x += Math.cos(f.a) * sp * dt; f.y += Math.sin(f.a) * sp * dt * .8;
       var mx = PX0 + t.len * .6 + 2, Mx = PX1 - t.len * .6 - 2, my = PY0 + t.hh + 3, My = PY1 - t.hh - 3;
@@ -289,7 +289,7 @@
     p.down = false; var held = p.downT; p.downT = 0; splash(p.x, p.y); SFX.lift();
     if (held < 0.22) return;
     var cand = [];
-    G.fish.forEach(function (f) { if (!f.dead) { var d = Math.hypot(f.x - p.x, f.y - p.y); if (d <= NET_R + TYPES[f.type].len * .1) cand.push([d, f]); } });
+    G.fish.forEach(function (f) { if (!f.dead) { var d = Math.hypot(f.x - p.x, f.y - p.y); if (d <= NET_R + TYPES[f.type].len * .15) cand.push([d, f]); } });
     if (!cand.length) { SFX.miss(); return; }
     cand.sort(function (a, b) { return a[0] - b[0]; });
     cand = cand.slice(0, 3);
@@ -301,7 +301,7 @@
     p.dur -= cost; var best = 0, pts = 0;
     cand.forEach(function (c, i) {
       var f = c[1], t = TYPES[f.type]; pts += t.pts; p.caught[t.rare ? 'r' : f.type]++; if (t.rare) best = 2; else if (f.type === 'b' && best < 1) best = 1;
-      f.dead = 1; f.respawn = t.rare ? rnd(6, 10) : f.type === 'b' ? rnd(3, 5) : rnd(1.8, 3.2); pop(f.x + i * 3, f.y - 8 - i * 9, '+' + t.pts, t.rare ? PAL.gold : PCOL[p.i]);
+      f.dead = 1; f.respawn = t.rare ? rnd(5, 8) : f.type === 'b' ? rnd(3, 5) : rnd(1.8, 3.2); pop(f.x + i * 3, f.y - 8 - i * 9, '+' + t.pts, t.rare ? PAL.gold : PCOL[p.i]);
       G.fx.push({ x: f.x, y: f.y, t: 0, big: true });
     });
     p.score += pts; addEvent(p.i, pts, best === 2 ? 'r' : best === 1 ? 'b' : 's');
@@ -433,7 +433,7 @@
       T(st, px + 38, y + 2, p.ready && on ? PAL.lime : (on ? PAL.cream : PAL.stone3), {});
       T(!p.cid ? '' : (on && !p.ready ? '按 READY' : ''), px + 120, y + 2, PAL.gold, {});
     });
-    T('雙方 READY 就開始 · Enter 強制', px, 162, PAL.cream, {});
+    T('雙方 READY 即開始 · Enter 強制'.replace('雙方 ', ''), px, 162, PAL.cream, {});
     T(base.replace(/^https?:\/\//, '').replace(/\/$/, '').slice(0, 40), px, 148, PAL.stone3, {});
     if (!AC || AC.state !== 'running') T('按任意鍵開啟音效', W - 5, 27, PAL.stone3, { al: 'r' });
   }
