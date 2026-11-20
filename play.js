@@ -22,9 +22,9 @@
   // dip: ring number beyond which the net goes into the water; ret: ring number you must come back inside for the scoop;
   // sens: net speed gain; dead: deadzone ring (no net movement inside it); wspeed: in-water move speed relative to above water
   var DPR = 3;
-  var DEF = { dip: 4.0, ret: 3.0, sens: 1, dead: 1.0, wspeed: 0.15 };
-  var USER = (function () { var u = {}, s = null; try { s = JSON.parse(localStorage.getItem('gf-tune-v5c') || 'null'); } catch (e) {} for (var k in DEF) u[k] = s && typeof s[k] === 'number' ? s[k] : DEF[k]; if (s && s.wspeed === 0.6) u.wspeed = DEF.wspeed; /* old default saved by v5: take the new one */ return u; })();
-  function saveUser() { try { localStorage.setItem('gf-tune-v5c', JSON.stringify(USER)); } catch (e) {} }
+  var DEF = { dip: 8.1, ret: 7.8, sens: 0.65, dead: 0.2, wspeed: 0.10 };
+  var USER = (function () { var u = {}, s = null; try { s = JSON.parse(localStorage.getItem('gf-tune-v7') || 'null'); } catch (e) {} for (var k in DEF) u[k] = s && typeof s[k] === 'number' ? s[k] : DEF[k]; return u; })();
+  function saveUser() { try { localStorage.setItem('gf-tune-v7', JSON.stringify(USER)); } catch (e) {} }
   function ringOf(mag) { return Math.asin(Math.min(1, mag)) * 57.29578 / DPR; }   // tilt magnitude (~sin angle) -> ring number (decimal)
   var S = { slot: -1, st: null, lastSt: 0, joined: false, full: false, relayOn: false, seq: 0, cx: 0, cy: 0, rc: 0, sn: 0, ss: 0,
     seenEv: {}, lastSent: 0, dirty: false, mode: 'start' /* start|bad|run */, touchMode: false, tries: 0,
