@@ -262,12 +262,23 @@
   ['contextmenu', 'selectstart', 'dragstart'].forEach(function (n) { document.addEventListener(n, function (e) { e.preventDefault(); }); });
 
   /* ================= feedback / render ================= */
+  /* short 8-bit blip on the phone that scored (own AudioContext, unlocked by the first tap; toggle in the tuning panel) */
+  var PAC = null, blipOn = true; try { blipOn = localStorage.getItem('gf-pblip') !== '0'; } catch (e) {}
+  var BLIP = { calls: 0, last: '' };
+  function pUnlock() { try { if (!PAC) PAC = new (window.AudioContext || window.webkitAudioContext)(); if (PAC.state !== 'running') PAC.resume(); } catch (e) {} }
+  ['pointerdown', 'touchend', 'click'].forEach(function (n) { addEventListener(n, pUnlock, { passive: true }); });
+  function blip(y) {
+    BLIP.calls++; BLIP.last = y; if (!blipOn || !PAC || PAC.state !== 'running') return;
+    var seq = y === 'r' ? [1047, 1319, 1568, 2093] : y === 'b' ? [784, 1047, 1319] : [1175, 1568], t = PAC.currentTime;
+    seq.forEach(function (f, i) { var o = PAC.createOscillator(), g = PAC.createGain(); o.type = 'square'; o.frequency.value = f; var a = t + i * 0.06; g.gain.setValueAtTime(0.05, a); g.gain.exponentialRampToValueAtTime(0.0001, a + 0.09); o.connect(g); g.connect(PAC.destination); o.start(a); o.stop(a + 0.1); });
+  }
   function events(m) {
     (m.ev || []).forEach(function (e) {
       if (S.seenEv[e.id]) return; S.seenEv[e.id] = 1;
       if (S.slot < 0 || e.s !== S.slot) return;
       var bad = e.y === 'x' || e.y === 'v';
       var d = document.createElement('div'); d.className = 'pop' + (bad ? ' x' : ''); d.textContent = bad ? 'X' : '+' + e.p; $('pops').appendChild(d); setTimeout(function () { d.remove(); }, 1200);
+      if (!bad) blip(e.y);
       if (navigator.vibrate) navigator.vibrate(bad ? [60, 40, 60] : e.y === 'r' ? [30, 30, 30, 30, 60] : 25);
     });
   }
@@ -319,7 +330,7 @@
     var t = $('tune'), h = '<div class="hd"><div id="pst" class="up"></div><b id="tl-big">0.0</b><b style="flex:1;color:#9aa3c7;font-size:15px">每環 ' + DPR + '°</b><button id="tclose">關閉</button></div>';
     SPECS.forEach(function (s, i) { h += '<div class="row' + (i < 2 ? ' main' + i : '') + '"><label for="tn-' + s[0] + '">' + s[1] + '</label><output id="to-' + s[0] + '"></output><input type="range" id="tn-' + s[0] + '" min="' + s[2] + '" max="' + s[3] + '" step="' + s[4] + '"></div>'; });
     h += '<div class="live"><span>入水次數 <b id="tl-dips">0</b></span><span>撈起 <b id="tl-lifts">0</b></span></div>';
-    h += '<div class="btns"><button id="treset">恢復預設</button></div>';
+    h += '<div class="btns"><button id="treset">恢復預設</button><button id="tsnd"></button></div>';
     t.innerHTML = h;
     function fmt(s) { var v = USER[s[0]]; return v.toFixed(s[6]) + s[5] + (s[5] === ' 環' ? ' (' + (v * DPR).toFixed(0) + '°)' : ''); }
     function show() { SPECS.forEach(function (s) { $('tn-' + s[0]).value = USER[s[0]]; $('to-' + s[0]).textContent = fmt(s); }); S.forceDraw = true; }
@@ -329,6 +340,9 @@
     }
     SPECS.forEach(function (s) { $('tn-' + s[0]).addEventListener('input', function () { USER[s[0]] = +this.value; clampRings(s[0]); saveUser(); show(); }); });
     $('treset').addEventListener('click', function () { for (var k in DEF) USER[k] = DEF[k]; saveUser(); show(); });
+    function sndLabel() { $('tsnd').textContent = blipOn ? '♪ 得分音 開' : '♪ 得分音 關'; }
+    $('tsnd').addEventListener('click', function () { blipOn = !blipOn; try { localStorage.setItem('gf-pblip', blipOn ? '1' : '0'); } catch (e) {} sndLabel(); });
+    sndLabel();
     $('gear').addEventListener('click', function () { show(); t.classList.add('show'); });
     $('tclose').addEventListener('click', function () { t.classList.remove('show'); });
     setInterval(function () {
@@ -338,6 +352,6 @@
     }, 100);
   })();
   showScreen('start');
-  window.__gfp = { S: S, hub: hub, cid: cid, TUNE: TUNE, USER: USER, DEF: DEF };
+  window.__gfp = { S: S, hub: hub, cid: cid, TUNE: TUNE, USER: USER, DEF: DEF, BLIP: BLIP };
   render();
 })();

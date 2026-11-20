@@ -43,6 +43,7 @@ async def main():
         br = await pw.chromium.launch(executable_path='/usr/bin/google-chrome', args=['--no-sandbox'])
         hctx = await br.new_context(viewport={'width': 1280, 'height': 720})
         host = await hctx.new_page()
+        catchlog = []; host.on('console', lambda m: catchlog.append(m.text) if m.text.startswith('[sfx] catch') else None)
         host.on('pageerror', lambda e: errs.append(('host', str(e))))
         host.on('console', lambda m: errs.append(('host-console', m.text)) if m.type == 'error' and 'WebSocket' not in m.text else None)
         await host.goto(BASE + 'index.html?dur=40', wait_until='load')
@@ -63,6 +64,7 @@ async def main():
         out['hover_2p_selected'] = await host.evaluate('window.__gf.G.sel'); await host.screenshot(path=SH + f'{TAG}_host_title_hover2p.png')
         await click_btn('p1'); await asyncio.sleep(.6)
         out['after_click_1p'] = {'phase': await host.evaluate('window.__gf.G.phase'), 'mode': await host.evaluate('window.__gf.G.mode')}; log('clicked 1P', out['after_click_1p'])
+        await asyncio.sleep(.5); out['audio_after_tap'] = await host.evaluate('window.__gf.audio()'); log('audio after tap', out['audio_after_tap']); await host.screenshot(path=SH + f'{TAG}_host_lobby_mute_icon.png')
         await host.screenshot(path=SH + f'{TAG}_host_lobby_1p_empty.png')
         # ---------------- 1P ----------------
         async def start_phone(pg, beta):
@@ -80,6 +82,7 @@ async def main():
         async def tilt_to(pg, pi, g, bd): await pg.evaluate(f"window.__sim.gamma={g};window.__sim.beta={B0[pi] + bd}")
         async def hstate(pi): return await host.evaluate("""(pi)=>{const G=window.__gf.G,p=G.players[pi];return {ph:G.phase,x:p.x,y:p.y,br:p.broken,dur:p.dur,dn:p.dn,
                   fish:G.fish.filter(f=>!f.dead).map(f=>({x:f.x,y:f.y,t:f.type,a:f.a,sp:f.sp}))}}""", pi)
+        async def pgs_blips(pg): return await pg.evaluate('window.__gfp.BLIP')
         DIPSHOT = {'done': False}
         async def dipped_shots(pi):
             info = await host.evaluate("(pi)=>{const G=window.__gf.G,p=G.players[pi];return {x:p.x,y:p.y,dn:p.dn,near:G.fish.filter(f=>!f.dead&&Math.hypot(f.x-p.x,f.y-p.y)<26).length}}", pi)
@@ -98,8 +101,8 @@ async def main():
                 tg = max(st['fish'], key=score)
                 tx = tg['x'] + math.cos(tg['a']) * tg['sp'] * .6; ty = tg['y'] + math.sin(tg['a']) * tg['sp'] * .8 * .6
                 ex, ey = tx - st['x'], ty - st['y']; d = math.hypot(ex, ey) or 1
-                if d > 11:
-                    m = min(21, 6 + .5 * d); await tilt_to(pg, pi, ex / d * m, ey / d * m); await asyncio.sleep(.12)
+                if d > 7:
+                    m = min(21, 4 + .6 * d); await tilt_to(pg, pi, ex / d * m, ey / d * m); await asyncio.sleep(.12)
                 else:
                     await tilt_to(pg, pi, 0, 0); await asyncio.sleep(.2); t0 = time.time()
                     while time.time() - t0 < 1.5:
@@ -129,7 +132,7 @@ async def main():
                 st = await host.evaluate("({ph:window.__gf.G.phase,t:window.__gf.G.tLeft,s:window.__gf.G.players.map(p=>p.score)})")
                 if st['ph'] == 'end': break
                 if not shot and st['t'] < 22:
-                    shot = True; await host.screenshot(path=SH + f'{TAG}_host_midgame_{tag}.png')
+                    shot = True; out.setdefault('audio_mid', {})[tag] = await host.evaluate('window.__gf.audio()'); await host.screenshot(path=SH + f'{TAG}_host_midgame_{tag}.png')
                     for i, pg in enumerate(pgs): await pg.screenshot(path=SH + f'{TAG}_phone{i+1}_midgame_{tag}.png')
                 await asyncio.sleep(.5)
             for t in tasks: t.cancel()
@@ -138,6 +141,9 @@ async def main():
         res = await host.evaluate("({s:window.__gf.G.players.map(p=>p.score),best:window.__gf.G.best,newBest:window.__gf.G.newBest,mode:window.__gf.G.mode,stored:localStorage.getItem('gf-best-1p')})")
         await host.screenshot(path=SH + f'{TAG}_host_results_1p.png'); await pA.screenshot(path=SH + f'{TAG}_phone_results_1p.png')
         shown = await pA.evaluate("({sc:+document.getElementById('sc').textContent,head:document.getElementById('overh').textContent,over:document.getElementById('overp').innerText})")
+        out['phone_blips_1p'] = await pgs_blips(pA)
+        mu = host.locator('button[aria-label=sound]'); await mu.click(); m1 = await host.evaluate('window.__gf.audio().muted'); await host.screenshot(path=SH + f'{TAG}_host_muted_icon.png'); await mu.click(); m2 = await host.evaluate('window.__gf.audio().muted'); out['mute_toggle'] = [m1, m2]
+        out['audio_end_1p'] = await host.evaluate('window.__gf.audio()')
         out['one_player'] = {'host': res, 'phone': shown, 'match': shown['sc'] == res['s'][0], 'no_opponent_text': 'vs' not in shown['over'] and '對手' not in shown['over']}; log('1P result', out['one_player'])
         # ---------------- back to title (click the 回標題 button) ----------------
         await click_btn('back'); await asyncio.sleep(1.0)
@@ -166,7 +172,7 @@ async def main():
         await host.keyboard.press('Escape'); await asyncio.sleep(1.0)
         out['back_to_title_esc'] = {'phase': await host.evaluate('window.__gf.G.phase'), 'mode': await host.evaluate('window.__gf.G.mode')}; log('back via Esc', out['back_to_title_esc'])
         await host.screenshot(path=SH + f'{TAG}_host_title_after_2p.png')
-        out['audio'] = await host.evaluate('window.__gf.audio ? window.__gf.audio() : null')
+        out['audio'] = await host.evaluate('window.__gf.audio ? window.__gf.audio() : null'); out['catch_log_lines'] = len(catchlog); out['catch_log_sample'] = catchlog[:6]; out['phone_blips_2p'] = [await pgs_blips(pA), await pgs_blips(pB)]
         out['errors'] = errs[:12]
         json.dump(out, open(SH + f'{TAG}_run.json', 'w'), ensure_ascii=False, indent=1)
         log('DONE', json.dumps(out, ensure_ascii=False)[:2500])
