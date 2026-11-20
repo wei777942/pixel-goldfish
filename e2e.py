@@ -83,13 +83,13 @@ async def main():
         async def hstate(pi): return await host.evaluate("""(pi)=>{const G=window.__gf.G,p=G.players[pi];return {ph:G.phase,x:p.x,y:p.y,br:p.broken,dur:p.dur,dn:p.dn,
                   fish:G.fish.filter(f=>!f.dead).map(f=>({x:f.x,y:f.y,t:f.type,a:f.a,sp:f.sp}))}}""", pi)
         async def pgs_blips(pg): return await pg.evaluate('window.__gfp.BLIP')
-        DIPSHOT = {'done': False}
-        async def dipped_shots(pi):
+        DIPSHOT = {'n': 0, 'last': 0}
+        async def dipped_shots(pi, n):
             info = await host.evaluate("(pi)=>{const G=window.__gf.G,p=G.players[pi];return {x:p.x,y:p.y,dn:p.dn,near:G.fish.filter(f=>!f.dead&&Math.hypot(f.x-p.x,f.y-p.y)<26).length}}", pi)
             r = await host.evaluate("(()=>{const r=document.getElementById('c').getBoundingClientRect();return [r.left,r.top,r.width,r.height]})()")
             k = r[2] / 320; cx = r[0] + info['x'] * k; cy = r[1] + info['y'] * k
-            await host.screenshot(path=SH + f'{TAG}_host_dipped_net.png'); await host.screenshot(path=SH + f'{TAG}_host_dipped_net_zoom.png', clip={'x': max(0, cx - 120), 'y': max(0, cy - 90), 'width': 240, 'height': 180})
-            out['dipped_shot'] = info; log('dipped net shot', info)
+            await host.screenshot(path=SH + f'{TAG}_host_dipped_net{n}.png'); await host.screenshot(path=SH + f'{TAG}_host_dipped_net{n}_zoom.png', clip={'x': max(0, cx - 120), 'y': max(0, cy - 90), 'width': 240, 'height': 180})
+            out.setdefault('dipped_shots', []).append(info); log('dipped net shot', n, info)
         async def bot(pg, pi):
             while True:
                 st = await hstate(pi)
@@ -112,8 +112,8 @@ async def main():
                             tg = min(st['fish'], key=lambda f: math.hypot(f['x'] - st['x'], f['y'] - st['y'])); ex, ey = tg['x'] - st['x'], tg['y'] - st['y']; d = math.hypot(ex, ey) or 1
                         if time.time() - t0 > .45 and d < 9: break
                         await tilt_to(pg, pi, ex / d * 27, ey / d * 27)
-                        if pi == 0 and not DIPSHOT['done'] and time.time() - t0 > .5 and st['dn']:
-                            DIPSHOT['done'] = True; await dipped_shots(pi)
+                        if st['dn'] and DIPSHOT['n'] < 3 and time.time() - t0 > .25 and min(math.hypot(f['x'] - st['x'], f['y'] - st['y']) for f in st['fish']) < 10 and time.time() - DIPSHOT['last'] > 3:
+                            DIPSHOT['n'] += 1; DIPSHOT['last'] = time.time(); await dipped_shots(pi, DIPSHOT['n'])
                         await asyncio.sleep(.07)
                     await tilt_to(pg, pi, 0, 0); await asyncio.sleep(.8)
         async def ready_all(pgs):

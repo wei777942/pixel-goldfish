@@ -473,7 +473,23 @@
     ctx.drawImage(e.c, bx, by + bob);
     if (t.rare && ((G.t * 6 + f.wob) % 2) < 1) { var sx = Math.round(f.x + Math.sin(G.t * 5 + f.wob) * 8), sy = Math.round(f.y - 6 + Math.cos(G.t * 4) * 3); R(sx, sy - 1, 1, 3, PAL.white); R(sx - 1, sy, 3, 1, PAL.white); }
   }
-  function drawNet(p) {
+  /* dipped net = under the fish, tinted a little by the water; cached per wear stage + colour */
+  var wetCache = {};
+  function wetNet(st, col) {
+    var k = st + col; if (wetCache[k]) return wetCache[k];
+    var src = NetSprite.get(st, col, true), c = document.createElement('canvas'); c.width = src.width; c.height = src.height;
+    var x = c.getContext('2d'); x.drawImage(src, 0, 0); x.globalCompositeOperation = 'source-atop'; x.fillStyle = 'rgba(10,50,120,0.32)'; x.fillRect(0, 0, c.width, c.height);
+    return (wetCache[k] = c);
+  }
+  /* layer 'under': nets in the water, drawn before the fish. layer 'over': everything else (raised nets, broken net, rim + name of dipped nets) */
+  function drawNet(p, layer) {
+    if (layer === 'under') {
+      if (!p.dn || p.broken > 0) return;
+      var ux = Math.round(p.x), uy = Math.round(p.y);
+      circleDither(ux, uy, NET_R, PAL.hi, 0);
+      ctx.drawImage(wetNet(NetSprite.stageOf(p.dur, false), PCOL[p.i]), ux - NetSprite.C, uy - NetSprite.C);
+      return;
+    }
     var col = PCOL[p.i], x = Math.round(p.x), y = Math.round(p.y), on = connected(p), up = !p.dn, st = NetSprite.stageOf(p.dur, p.broken > 0);
     if (p.broken > 0) {
       if (p.broken < 1 && ((G.t * 8) | 0) & 1) { T(PNAME[p.i], x, y - NET_R - 14, col, { al: 'c', sh: PAL.ink }); return; } // blinks just before the new net arrives
@@ -485,10 +501,10 @@
       for (var yy = -NET_R; yy <= NET_R; yy += 2) { var w = Math.floor(Math.sqrt(NET_R * NET_R - yy * yy)); R(x - w + 3, y + yy + 5, w * 2, 1, PAL.deep); }
       y -= p.lift > 0 ? 9 : 5;
     } else {
-      circleDither(x, y, NET_R, PAL.hi, 0);
-      var rr = Math.floor((G.t * 10) % 3); circleOutline(x, y, NET_R + 2 + rr, PAL.hi);
+      // dipped: the net body is already drawn under the fish; only the rim (thin ring + pulsing ripple) goes on top
+      var rr = Math.floor((G.t * 10) % 3); circleOutline(x, y, NET_R + 2 + rr, PAL.hi); circleOutline(x, y, NET_R, col);
     }
-    ctx.drawImage(NetSprite.get(st, col, !up), x - NetSprite.C, y - NetSprite.C);
+    if (up) ctx.drawImage(NetSprite.get(st, col, false), x - NetSprite.C, y - NetSprite.C);
     T(PNAME[p.i], x, y - NET_R - 14, col, { al: 'c', sh: PAL.ink });
     if (!on) T('離線', x, y + NET_R + 3, PAL.red, { al: 'c', sh: PAL.ink });
   }
@@ -632,8 +648,10 @@
     SPARK.forEach(function (s) { if (Math.sin(G.t * 2 + s[2]) > .6) R(s[0], s[1], 2, 1, PAL.hi); });
     // ripples
     G.fx.forEach(function (e) { var r = 3 + Math.floor(e.t * (e.big ? 30 : 22)); if (e.t < .7) circleOutline(e.x, e.y, r, e.t < .35 ? PAL.white : PAL.hi); });
+    var nets = G.phase !== 'title' ? G.players.slice(0, cap()).filter(function (p) { return G.phase !== 'lobby' || p.cid; }) : [];
+    nets.forEach(function (p) { drawNet(p, 'under'); });
     G.fish.forEach(drawFish);
-    if (G.phase !== 'title') G.players.slice(0, cap()).forEach(function (p, i) { if (G.phase !== 'lobby' || p.cid) drawNet(p); });
+    nets.forEach(function (p) { drawNet(p, 'over'); });
     G.pops.forEach(function (e) { T(e.txt, e.x, e.y - e.t * 18, e.col, { al: 'c', sh: PAL.ink, sc: 1 }); });
     G.btns = [];
     if (G.phase !== 'title') hud();
